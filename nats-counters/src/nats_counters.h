@@ -17,8 +17,6 @@
 #include <nats/nats.h>
 #include <stdbool.h>
 
-#include "status.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -75,14 +73,14 @@ typedef struct __natsCounterEntry   natsCounterEntry;
  * @param counter the counter that issued the batch request (not owned).
  * @param entry the current result entry (caller must NOT destroy; valid only
  * for the duration of this callback).
- * @param status #ORBIT_COUNTERS_OK on success; any other value signals an
+ * @param status #NATS_OK on success; any other value signals an
  * error and `entry` will be `NULL`.
  * @param closure the user-supplied pointer passed to #natsCounter_GetMultiple().
  */
-typedef void (*natsCounterIterFn)(natsCounter          *counter,
-                                  natsCounterEntry     *entry,
-                                  orbitCountersStatus   status,
-                                  void                 *closure);
+typedef void (*natsCounterIterFn)(natsCounter      *counter,
+                                  natsCounterEntry *entry,
+                                  natsStatus        status,
+                                  void             *closure);
 
 /** \brief Callback invoked once per source contribution by #natsCounterEntry_IterSources().
  *
@@ -123,12 +121,12 @@ typedef void (*natsCounterSourceIterFn)(const char *stream,
  * @param counter receives the newly allocated counter.
  * @param js JetStream context.
  * @param stream name of the stream.
- * @return #ORBIT_COUNTERS_OK on success, #ORBIT_COUNTERS_INVALID_CONFIG if a
+ * @return #NATS_OK on success, #NATS_INVALID_CONFIG if a
  * required stream flag is absent.
  */
-orbitCountersStatus natsCounter_GetFromStream(natsCounter **counter,
-                                              jsCtx        *js,
-                                              const char   *stream);
+natsStatus natsCounter_GetFromStream(natsCounter **counter,
+                                     jsCtx        *js,
+                                     const char   *stream);
 
 /** \brief Releases all resources owned by `counter`.
  *
@@ -156,13 +154,13 @@ void natsCounter_Destroy(natsCounter *counter);
  * @param subject the subject to modify.
  * @param delta amount to add (may be negative).
  * @param newValue receives the resulting total.
- * @return #ORBIT_COUNTERS_OK on success, #ORBIT_COUNTERS_OVERFLOW if the
+ * @return #NATS_OK on success, #NATS_ERR if the
  * resulting value exceeds `long long`.
  */
-orbitCountersStatus natsCounter_Add(natsCounter  *counter,
-                                    const char   *subject,
-                                    long long     delta,
-                                    long long    *newValue);
+natsStatus natsCounter_Add(natsCounter  *counter,
+                           const char   *subject,
+                           long long     delta,
+                           long long    *newValue);
 
 /** \brief Adds `delta` to the counter for `subject`, returning the result as
  * an arbitrary-precision decimal string.
@@ -175,46 +173,46 @@ orbitCountersStatus natsCounter_Add(natsCounter  *counter,
  * @param subject the subject to modify.
  * @param delta amount to add (may be negative).
  * @param newValue receives a newly allocated string; caller must `free()`.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounter_AddInt(natsCounter  *counter,
-                                       const char   *subject,
-                                       long long     delta,
-                                       char        **newValue);
+natsStatus natsCounter_AddInt(natsCounter  *counter,
+                              const char   *subject,
+                              long long     delta,
+                              char        **newValue);
 
 /** \brief Adds 1 to the counter for `subject`.
  *
  * @param counter the counter.
  * @param subject the subject to increment.
  * @param newValue receives the resulting total.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounter_Increment(natsCounter *counter,
-                                          const char  *subject,
-                                          long long   *newValue);
+natsStatus natsCounter_Increment(natsCounter *counter,
+                                 const char  *subject,
+                                 long long   *newValue);
 
 /** \brief Subtracts 1 from the counter for `subject`.
  *
  * @param counter the counter.
  * @param subject the subject to decrement.
  * @param newValue receives the resulting total.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounter_Decrement(natsCounter *counter,
-                                          const char  *subject,
-                                          long long   *newValue);
+natsStatus natsCounter_Decrement(natsCounter *counter,
+                                 const char  *subject,
+                                 long long   *newValue);
 
 /** \brief Reads the current total for `subject` without modifying it.
  *
  * @param counter the counter.
  * @param subject the subject to read.
  * @param value receives the current total.
- * @return #ORBIT_COUNTERS_OK on success, #ORBIT_COUNTERS_OVERFLOW if the
+ * @return #NATS_OK on success, #NATS_ERR if the
  * value exceeds `long long`.
  */
-orbitCountersStatus natsCounter_Load(natsCounter *counter,
-                                     const char  *subject,
-                                     long long   *value);
+natsStatus natsCounter_Load(natsCounter *counter,
+                            const char  *subject,
+                            long long   *value);
 
 /** @} */ // end counterIntGroup
 
@@ -236,12 +234,12 @@ orbitCountersStatus natsCounter_Load(natsCounter *counter,
  * @param subject the subject to modify.
  * @param delta decimal string delta (e.g. "+5" or "-3").
  * @param newValue receives a newly allocated string; caller must `free()`.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounter_AddStr(natsCounter  *counter,
-                                       const char   *subject,
-                                       const char   *delta,
-                                       char        **newValue);
+natsStatus natsCounter_AddStr(natsCounter  *counter,
+                              const char   *subject,
+                              const char   *delta,
+                              char        **newValue);
 
 /** \brief Reads the current total as a decimal string.
  *
@@ -250,11 +248,11 @@ orbitCountersStatus natsCounter_AddStr(natsCounter  *counter,
  * @param counter the counter.
  * @param subject the subject to read.
  * @param value receives a newly allocated string; caller must `free()`.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounter_LoadStr(natsCounter  *counter,
-                                        const char   *subject,
-                                        char        **value);
+natsStatus natsCounter_LoadStr(natsCounter  *counter,
+                               const char   *subject,
+                               char        **value);
 
 /** @} */ // end counterStrGroup
 
@@ -275,19 +273,19 @@ orbitCountersStatus natsCounter_LoadStr(natsCounter  *counter,
  * @param counter the counter.
  * @param subject the subject to fetch.
  * @param entry receives the newly allocated entry.
- * @return #ORBIT_COUNTERS_OK on success, #ORBIT_COUNTERS_NOT_FOUND if the
+ * @return #NATS_OK on success, #NATS_NOT_FOUND if the
  * subject has never been written.
  */
-orbitCountersStatus natsCounter_Get(natsCounter      *counter,
-                                    const char       *subject,
-                                    natsCounterEntry **entry);
+natsStatus natsCounter_Get(natsCounter      *counter,
+                           const char       *subject,
+                           natsCounterEntry **entry);
 
 /** \brief Fetches counter entries for multiple subjects in a single batch.
  *
  * The `handler` callback is invoked once per result, in an unspecified order.
  * Non-existent subjects are silently skipped. When all results have been
  * delivered, the callback is invoked one final time with
- * status=#ORBIT_COUNTERS_OK and entry=`NULL` to signal completion.
+ * status=#NATS_OK and entry=`NULL` to signal completion.
  *
  * `subjects` may contain NATS wildcard tokens; see ADR-49 for details.
  *
@@ -296,13 +294,13 @@ orbitCountersStatus natsCounter_Get(natsCounter      *counter,
  * @param numSubjects number of elements in `subjects`.
  * @param handler callback invoked once per result.
  * @param closure user-supplied pointer forwarded to `handler`.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounter_GetMultiple(natsCounter       *counter,
-                                            const char       **subjects,
-                                            int                numSubjects,
-                                            natsCounterIterFn  handler,
-                                            void              *closure);
+natsStatus natsCounter_GetMultiple(natsCounter       *counter,
+                                   const char       **subjects,
+                                   int                numSubjects,
+                                   natsCounterIterFn  handler,
+                                   void              *closure);
 
 /** @} */ // end counterEntryGroup
 
@@ -332,10 +330,10 @@ const char *natsCounterEntry_ValueStr(natsCounterEntry *entry);
  *
  * @param entry the entry.
  * @param value receives the counter total.
- * @return #ORBIT_COUNTERS_OK on success, #ORBIT_COUNTERS_OVERFLOW if the
+ * @return #NATS_OK on success, #NATS_ERR if the
  * value exceeds the range of `long long`.
  */
-orbitCountersStatus natsCounterEntry_Value(natsCounterEntry *entry, long long *value);
+natsStatus natsCounterEntry_Value(natsCounterEntry *entry, long long *value);
 
 /** \brief Returns `true` when the fetched message carries a Nats-Incr header.
  *
@@ -357,11 +355,11 @@ const char *natsCounterEntry_IncrementStr(natsCounterEntry *entry);
  *
  * @param entry the entry.
  * @param increment receives the increment value.
- * @return #ORBIT_COUNTERS_OK on success, #ORBIT_COUNTERS_NOT_FOUND if no
- * increment is present, #ORBIT_COUNTERS_OVERFLOW if the value exceeds
+ * @return #NATS_OK on success, #NATS_NOT_FOUND if no
+ * increment is present, #NATS_ERR if the value exceeds
  * `long long`.
  */
-orbitCountersStatus natsCounterEntry_Increment(natsCounterEntry *entry, long long *increment);
+natsStatus natsCounterEntry_Increment(natsCounterEntry *entry, long long *increment);
 
 /** \brief Returns `true` when the entry carries a Nats-Counter-Sources header.
  *
@@ -380,11 +378,11 @@ bool natsCounterEntry_HasSources(natsCounterEntry *entry);
  * @param entry the entry.
  * @param fn callback invoked once per source.
  * @param closure user-supplied pointer forwarded to `fn`.
- * @return #ORBIT_COUNTERS_OK on success.
+ * @return #NATS_OK on success.
  */
-orbitCountersStatus natsCounterEntry_IterSources(natsCounterEntry        *entry,
-                                                  natsCounterSourceIterFn  fn,
-                                                  void                    *closure);
+natsStatus natsCounterEntry_IterSources(natsCounterEntry        *entry,
+                                         natsCounterSourceIterFn  fn,
+                                         void                    *closure);
 
 /** \brief Releases all resources owned by `entry`.
  *

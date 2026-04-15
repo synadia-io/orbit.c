@@ -38,8 +38,7 @@ _printSource(const char *stream, const char *subject, const char *value,
 
 int main(int argc, char **argv)
 {
-    natsStatus           ns      = NATS_OK;
-    orbitCountersStatus  s       = ORBIT_COUNTERS_OK;
+    natsStatus           s       = NATS_OK;
     natsConnection      *nc      = NULL;
     jsCtx               *js      = NULL;
     natsCounter         *counter = NULL;
@@ -50,11 +49,11 @@ int main(int argc, char **argv)
     printf("=== NATS JetStream Counter Example ===\n\n");
 
     // Connect
-    ns = natsConnection_ConnectTo(&nc, url);
-    if (ns != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(ns)); return 1; }
+    s = natsConnection_ConnectTo(&nc, url);
+    if (s != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(s)); return 1; }
 
-    ns = natsConnection_JetStream(&js, nc, NULL);
-    if (ns != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(ns)); goto done; }
+    s = natsConnection_JetStream(&js, nc, NULL);
+    if (s != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(s)); goto done; }
 
     // TODO: Create or bind the stream.
     //   jsStreamConfig cfg      = {0};
@@ -66,54 +65,54 @@ int main(int argc, char **argv)
     //   js_AddStream(NULL, js, &cfg, NULL); // ignore error if already exists
 
     s = natsCounter_GetFromStream(&counter, js, STREAM_NAME);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
 
     // Increment counters for different event types
     printf("Recording events...\n");
 
     s = natsCounter_Add(counter, "events.clicks", 5, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  Clicks: +5 = %lld\n", value);
 
     s = natsCounter_Add(counter, "events.views", 100, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  Views: +100 = %lld\n", value);
 
     s = natsCounter_Add(counter, "events.errors", 2, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  Errors: +2 = %lld\n", value);
 
     printf("\nRecording more events...\n");
 
     s = natsCounter_Add(counter, "events.clicks", 3, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  Clicks: +3 = %lld\n", value);
 
     s = natsCounter_Add(counter, "events.views", 50, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  Views: +50 = %lld\n", value);
 
     // Decrement (correction)
     s = natsCounter_Decrement(counter, "events.errors", &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  Errors: -1 = %lld\n", value);
 
     // Load current totals
     printf("\nCurrent totals:\n");
 
     s = natsCounter_Load(counter, "events.clicks", &value);
-    if (s == ORBIT_COUNTERS_OK) printf("  Total clicks: %lld\n", value);
+    if (s == NATS_OK) printf("  Total clicks: %lld\n", value);
 
     s = natsCounter_Load(counter, "events.views", &value);
-    if (s == ORBIT_COUNTERS_OK) printf("  Total views:  %lld\n", value);
+    if (s == NATS_OK) printf("  Total views:  %lld\n", value);
 
     s = natsCounter_Load(counter, "events.errors", &value);
-    if (s == ORBIT_COUNTERS_OK) printf("  Total errors: %lld\n", value);
+    if (s == NATS_OK) printf("  Total errors: %lld\n", value);
 
     // Get full entry with metadata
     printf("\nDetailed entry for clicks:\n");
     s = natsCounter_Get(counter, "events.clicks", &entry);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
 
     printf("  Subject: %s\n", natsCounterEntry_Subject(entry));
     printf("  Value:   %s\n", natsCounterEntry_ValueStr(entry));
@@ -133,9 +132,9 @@ done:
     if (js != NULL) jsCtx_Destroy(js);
     if (nc != NULL) natsConnection_Destroy(nc);
 
-    if (s != ORBIT_COUNTERS_OK)
+    if (s != NATS_OK)
     {
-        printf("Error: %s\n", orbitCountersStatus_GetText(s));
+        printf("Error: %s\n", natsStatus_GetText(s));
         return 1;
     }
 

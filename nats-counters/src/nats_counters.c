@@ -41,44 +41,6 @@ struct __natsCounterEntry
 };
 
 //-----------------------------------------------------------------------------
-// Status translation
-//-----------------------------------------------------------------------------
-
-// TODO: Surface the underlying nats error text to the caller, e.g. via
-// a per-counter last-error string or a thread-local, so that
-// ORBIT_COUNTERS_NATS_ERR is debuggable without nats_PrintLastErrorStack.
-static orbitCountersStatus
-_translateNatsStatus(natsStatus s)
-{
-    switch (s)
-    {
-    case NATS_OK:           return ORBIT_COUNTERS_OK;
-    case NATS_INVALID_ARG:  return ORBIT_COUNTERS_INVALID_ARG;
-    case NATS_NO_MEMORY:    return ORBIT_COUNTERS_NO_MEMORY;
-    case NATS_NOT_FOUND:    return ORBIT_COUNTERS_NOT_FOUND;
-    default:                return ORBIT_COUNTERS_NATS_ERR;
-    }
-}
-
-const char *
-orbitCountersStatus_GetText(orbitCountersStatus s)
-{
-    switch (s)
-    {
-    case ORBIT_COUNTERS_OK:             return "ok";
-    case ORBIT_COUNTERS_ERR:            return "error";
-    case ORBIT_COUNTERS_INVALID_ARG:    return "invalid argument";
-    case ORBIT_COUNTERS_NO_MEMORY:      return "no memory";
-    case ORBIT_COUNTERS_NOT_FOUND:      return "not found";
-    case ORBIT_COUNTERS_INVALID_CONFIG: return "invalid stream configuration";
-    case ORBIT_COUNTERS_OVERFLOW:       return "value overflow";
-    case ORBIT_COUNTERS_PARSE_ERR:      return "parse error";
-    case ORBIT_COUNTERS_NATS_ERR:       return "nats error";
-    default:                            return "unknown error";
-    }
-}
-
-//-----------------------------------------------------------------------------
 // Helpers
 //-----------------------------------------------------------------------------
 
@@ -95,32 +57,32 @@ _counter_formatDelta(char *dst, long long delta)
 }
 
 // _counter_parseLL converts a decimal string produced by the server into a
-// long long.  Returns ORBIT_COUNTERS_OVERFLOW when the value is out of range.
-static orbitCountersStatus
+// long long.  Returns NATS_ERR when the value is out of range or unparseable.
+static natsStatus
 _counter_parseLL(const char *str, long long *out)
 {
     char *end = NULL;
 
     if (str == NULL || *str == '\0')
-        return ORBIT_COUNTERS_PARSE_ERR;
+        return NATS_ERR;
 
     errno = 0;
     *out = strtoll(str, &end, 10);
 
     if (errno == ERANGE)
-        return ORBIT_COUNTERS_OVERFLOW;
+        return NATS_ERR;
 
     if (*end != '\0')
-        return ORBIT_COUNTERS_PARSE_ERR;
+        return NATS_ERR;
 
-    return ORBIT_COUNTERS_OK;
+    return NATS_OK;
 }
 
 //-----------------------------------------------------------------------------
 // Counter lifecycle
 //-----------------------------------------------------------------------------
 
-orbitCountersStatus
+natsStatus
 natsCounter_GetFromStream(natsCounter **counter,
                            jsCtx        *js,
                            const char   *stream)
@@ -130,34 +92,34 @@ natsCounter_GetFromStream(natsCounter **counter,
     natsCounter  *c   = NULL;
 
     if (counter == NULL || js == NULL || stream == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     s = js_GetStreamInfo(&info, js, stream, NULL, NULL);
     if (s != NATS_OK)
-        return _translateNatsStatus(s);
+        return s;
 
     if (!info->Config->AllowDirect || !info->Config->AllowMsgCounter)
     {
         jsStreamInfo_Destroy(info);
-        return ORBIT_COUNTERS_INVALID_CONFIG;
+        return NATS_INVALID_CONFIG;
     }
 
     jsStreamInfo_Destroy(info);
 
     c = (natsCounter *)calloc(1, sizeof(*c));
     if (c == NULL)
-        return ORBIT_COUNTERS_NO_MEMORY;
+        return NATS_NO_MEMORY;
 
     c->js     = js;
     c->stream = strdup(stream);
     if (c->stream == NULL)
     {
         free(c);
-        return ORBIT_COUNTERS_NO_MEMORY;
+        return NATS_NO_MEMORY;
     }
 
     *counter = c;
-    return ORBIT_COUNTERS_OK;
+    return NATS_OK;
 }
 
 void
@@ -174,19 +136,19 @@ natsCounter_Destroy(natsCounter *counter)
 // Integer convenience operations
 //-----------------------------------------------------------------------------
 
-orbitCountersStatus
+natsStatus
 natsCounter_Add(natsCounter *counter,
                  const char  *subject,
                  long long    delta,
                  long long   *newValue)
 {
-    char                deltaStr[24];
-    char               *valStr = NULL;
-    orbitCountersStatus  s;
+    char        deltaStr[24];
+    char       *valStr = NULL;
+    natsStatus  s;
 
     _counter_formatDelta(deltaStr, delta);
     s = natsCounter_AddStr(counter, subject, deltaStr, &valStr);
-    if (s != ORBIT_COUNTERS_OK)
+    if (s != NATS_OK)
         return s;
 
     s = _counter_parseLL(valStr, newValue);
@@ -194,7 +156,7 @@ natsCounter_Add(natsCounter *counter,
     return s;
 }
 
-orbitCountersStatus
+natsStatus
 natsCounter_AddInt(natsCounter  *counter,
                     const char   *subject,
                     long long     delta,
@@ -206,7 +168,7 @@ natsCounter_AddInt(natsCounter  *counter,
     return natsCounter_AddStr(counter, subject, deltaStr, newValue);
 }
 
-orbitCountersStatus
+natsStatus
 natsCounter_Increment(natsCounter *counter,
                        const char  *subject,
                        long long   *newValue)
@@ -214,7 +176,7 @@ natsCounter_Increment(natsCounter *counter,
     return natsCounter_Add(counter, subject, 1, newValue);
 }
 
-orbitCountersStatus
+natsStatus
 natsCounter_Decrement(natsCounter *counter,
                        const char  *subject,
                        long long   *newValue)
@@ -222,16 +184,16 @@ natsCounter_Decrement(natsCounter *counter,
     return natsCounter_Add(counter, subject, -1, newValue);
 }
 
-orbitCountersStatus
+natsStatus
 natsCounter_Load(natsCounter *counter,
                   const char  *subject,
                   long long   *value)
 {
-    char               *valStr = NULL;
-    orbitCountersStatus  s;
+    char       *valStr = NULL;
+    natsStatus  s;
 
     s = natsCounter_LoadStr(counter, subject, &valStr);
-    if (s != ORBIT_COUNTERS_OK)
+    if (s != NATS_OK)
         return s;
 
     s = _counter_parseLL(valStr, value);
@@ -243,110 +205,92 @@ natsCounter_Load(natsCounter *counter,
 // Arbitrary-precision (string) operations
 //-----------------------------------------------------------------------------
 
-orbitCountersStatus
+natsStatus
 natsCounter_AddStr(natsCounter  *counter,
                     const char   *subject,
                     const char   *delta,
                     char        **newValue)
 {
-    natsStatus               ns  = NATS_OK;
-    natsMsg                 *msg = NULL;
-    jsPubAck                *pa  = NULL;
-    natsMsg                 *resp = NULL;
-    jsDirectGetMsgOptions    dgo;
+    natsStatus   s   = NATS_OK;
+    natsMsg     *msg = NULL;
+    jsPubAck    *pa  = NULL;
 
     if (counter == NULL || subject == NULL || delta == NULL || newValue == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     // Build message with Nats-Incr header and empty body.
-    ns = natsMsg_Create(&msg, subject, NULL, NULL, 0);
-    if (ns != NATS_OK)
-        return _translateNatsStatus(ns);
+    s = natsMsg_Create(&msg, subject, NULL, NULL, 0);
+    if (s != NATS_OK)
+        return s;
 
-    ns = natsMsgHeader_Set(msg, NATS_COUNTER_INCREMENT_HDR, delta);
-    if (ns != NATS_OK)
+    s = natsMsgHeader_Set(msg, NATS_COUNTER_INCREMENT_HDR, delta);
+    if (s != NATS_OK)
     {
         natsMsg_Destroy(msg);
-        return _translateNatsStatus(ns);
+        return s;
     }
 
-    // Publish via JetStream.
-    ns = js_PublishMsg(&pa, counter->js, msg, NULL, NULL);
+    // Publish via JetStream. The PubAck includes the counter value
+    // post-increment in the "val" field (ADR-49).
+    s = js_PublishMsg(&pa, counter->js, msg, NULL, NULL);
     natsMsg_Destroy(msg);
-    if (ns != NATS_OK)
-        return _translateNatsStatus(ns);
+    if (s != NATS_OK)
+        return s;
 
-    // TODO: Read the counter value directly from jsPubAck once the nats.c
-    // client exposes the "val" field, eliminating this extra direct-get.
-    //
-    jsDirectGetMsgOptions_Init(&dgo);
-    dgo.Sequence = pa->Sequence;
+    s = natsCounterParser_ParsePubAckValue(pa->Val, newValue);
     jsPubAck_Destroy(pa);
 
-    ns = js_DirectGetMsg(&resp, counter->js, counter->stream, NULL, &dgo);
-    if (ns != NATS_OK)
-        return _translateNatsStatus(ns);
-
-    ns = natsCounterParser_ParseValue(
-            (const unsigned char *)natsMsg_GetData(resp),
-            natsMsg_GetDataLength(resp),
-            newValue);
-    natsMsg_Destroy(resp);
-
-    if (ns != NATS_OK)
-        return ORBIT_COUNTERS_PARSE_ERR;
-
-    return ORBIT_COUNTERS_OK;
+    return s;
 }
 
-orbitCountersStatus
+natsStatus
 natsCounter_LoadStr(natsCounter  *counter,
                      const char   *subject,
                      char        **value)
 {
     natsCounterEntry   *entry = NULL;
-    orbitCountersStatus s;
+    natsStatus          s;
 
     s = natsCounter_Get(counter, subject, &entry);
-    if (s != ORBIT_COUNTERS_OK)
+    if (s != NATS_OK)
         return s;
 
     *value = strdup(natsCounterEntry_ValueStr(entry));
     natsCounterEntry_Destroy(entry);
 
-    return (*value != NULL) ? ORBIT_COUNTERS_OK : ORBIT_COUNTERS_NO_MEMORY;
+    return (*value != NULL) ? NATS_OK : NATS_NO_MEMORY;
 }
 
 //-----------------------------------------------------------------------------
 // Entry operations
 //-----------------------------------------------------------------------------
 
-orbitCountersStatus
+natsStatus
 natsCounter_Get(natsCounter      *counter,
                  const char       *subject,
                  natsCounterEntry **entry)
 {
-    natsStatus               ns  = NATS_OK;
+    natsStatus               s   = NATS_OK;
     jsDirectGetMsgOptions    dgo;
     natsMsg                 *msg = NULL;
     natsCounterEntry        *e   = NULL;
     const char              *hdr = NULL;
 
     if (counter == NULL || subject == NULL || entry == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     jsDirectGetMsgOptions_Init(&dgo);
     dgo.LastBySubject = subject;
 
-    ns = js_DirectGetMsg(&msg, counter->js, counter->stream, NULL, &dgo);
-    if (ns != NATS_OK)
-        return _translateNatsStatus(ns);
+    s = js_DirectGetMsg(&msg, counter->js, counter->stream, NULL, &dgo);
+    if (s != NATS_OK)
+        return s;
 
     e = (natsCounterEntry *)calloc(1, sizeof(*e));
     if (e == NULL)
     {
         natsMsg_Destroy(msg);
-        return ORBIT_COUNTERS_NO_MEMORY;
+        return NATS_NO_MEMORY;
     }
 
     // Subject — use the subject from the stored message.
@@ -355,17 +299,17 @@ natsCounter_Get(natsCounter      *counter,
     {
         natsMsg_Destroy(msg);
         natsCounterEntry_Destroy(e);
-        return ORBIT_COUNTERS_NO_MEMORY;
+        return NATS_NO_MEMORY;
     }
 
     // Parse body value.
-    ns = natsCounterParser_ParseValue(
+    s = natsCounterParser_ParseValue(
             (const unsigned char *)natsMsg_GetData(msg),
             natsMsg_GetDataLength(msg),
             &e->value);
 
     // Parse Nats-Incr header (optional — present on live counter messages).
-    if (ns == NATS_OK)
+    if (s == NATS_OK)
     {
         if (natsMsgHeader_Get(msg, NATS_COUNTER_INCREMENT_HDR, &hdr) == NATS_OK
             && hdr != NULL)
@@ -375,7 +319,7 @@ natsCounter_Get(natsCounter      *counter,
     }
 
     // Parse Nats-Counter-Sources header (optional — present on sourced streams).
-    if (ns == NATS_OK)
+    if (s == NATS_OK)
     {
         hdr = NULL;
         if (natsMsgHeader_Get(msg, NATS_COUNTER_SOURCES_HDR, &hdr) == NATS_OK
@@ -387,17 +331,17 @@ natsCounter_Get(natsCounter      *counter,
 
     natsMsg_Destroy(msg);
 
-    if (ns == NATS_OK)
+    if (s == NATS_OK)
     {
         *entry = e;
-        return ORBIT_COUNTERS_OK;
+        return NATS_OK;
     }
 
     natsCounterEntry_Destroy(e);
-    return ORBIT_COUNTERS_PARSE_ERR;
+    return NATS_ERR;
 }
 
-orbitCountersStatus
+natsStatus
 natsCounter_GetMultiple(natsCounter       *counter,
                          const char       **subjects,
                          int                numSubjects,
@@ -405,38 +349,38 @@ natsCounter_GetMultiple(natsCounter       *counter,
                          void              *closure)
 {
     if (counter == NULL || handler == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     if (subjects == NULL || numSubjects <= 0)
     {
         // Signal completion immediately.
-        handler(counter, NULL, ORBIT_COUNTERS_OK, closure);
-        return ORBIT_COUNTERS_OK;
+        handler(counter, NULL, NATS_OK, closure);
+        return NATS_OK;
     }
 
     // TODO: Use a single batch direct-get request instead of looping
     // with individual natsCounter_Get calls.
     for (int i = 0; i < numSubjects; i++)
     {
-        natsCounterEntry    *entry = NULL;
-        orbitCountersStatus  s = natsCounter_Get(counter, subjects[i], &entry);
+        natsCounterEntry *entry = NULL;
+        natsStatus        s = natsCounter_Get(counter, subjects[i], &entry);
 
-        if (s == ORBIT_COUNTERS_NOT_FOUND)
+        if (s == NATS_NOT_FOUND)
             continue; // non-existent subjects are silently skipped
 
-        if (s != ORBIT_COUNTERS_OK)
+        if (s != NATS_OK)
         {
             handler(counter, NULL, s, closure);
             return s;
         }
 
-        handler(counter, entry, ORBIT_COUNTERS_OK, closure);
+        handler(counter, entry, NATS_OK, closure);
         natsCounterEntry_Destroy(entry);
     }
 
     // Signal completion.
-    handler(counter, NULL, ORBIT_COUNTERS_OK, closure);
-    return ORBIT_COUNTERS_OK;
+    handler(counter, NULL, NATS_OK, closure);
+    return NATS_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -455,11 +399,11 @@ natsCounterEntry_ValueStr(natsCounterEntry *entry)
     return (entry != NULL) ? entry->value : NULL;
 }
 
-orbitCountersStatus
+natsStatus
 natsCounterEntry_Value(natsCounterEntry *entry, long long *value)
 {
     if (entry == NULL || value == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     return _counter_parseLL(entry->value, value);
 }
@@ -476,14 +420,14 @@ natsCounterEntry_IncrementStr(natsCounterEntry *entry)
     return (entry != NULL) ? entry->increment : NULL;
 }
 
-orbitCountersStatus
+natsStatus
 natsCounterEntry_Increment(natsCounterEntry *entry, long long *increment)
 {
     if (entry == NULL || increment == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     if (entry->increment == NULL)
-        return ORBIT_COUNTERS_NOT_FOUND;
+        return NATS_NOT_FOUND;
 
     return _counter_parseLL(entry->increment, increment);
 }
@@ -494,7 +438,7 @@ natsCounterEntry_HasSources(natsCounterEntry *entry)
     return (entry != NULL) && (entry->sources != NULL);
 }
 
-orbitCountersStatus
+natsStatus
 natsCounterEntry_IterSources(natsCounterEntry        *entry,
                                natsCounterSourceIterFn  fn,
                                void                    *closure)
@@ -502,12 +446,12 @@ natsCounterEntry_IterSources(natsCounterEntry        *entry,
     natsCounterSource *src;
 
     if (entry == NULL || fn == NULL)
-        return ORBIT_COUNTERS_INVALID_ARG;
+        return NATS_INVALID_ARG;
 
     for (src = entry->sources; src != NULL; src = src->next)
         fn(src->stream, src->subject, src->value, closure);
 
-    return ORBIT_COUNTERS_OK;
+    return NATS_OK;
 }
 
 void

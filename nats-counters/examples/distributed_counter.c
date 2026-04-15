@@ -90,8 +90,7 @@ _createGlobalStream(jsCtx *js)
 
 int main(int argc, char **argv)
 {
-    natsStatus           ns          = NATS_OK;
-    orbitCountersStatus  s           = ORBIT_COUNTERS_OK;
+    natsStatus           s           = NATS_OK;
     natsConnection      *nc          = NULL;
     jsCtx               *js          = NULL;
     natsCounter         *usEast      = NULL;
@@ -104,73 +103,73 @@ int main(int argc, char **argv)
 
     printf("=== Setting Up Regional Counters ===\n\n");
 
-    ns = natsConnection_ConnectTo(&nc, url);
-    if (ns != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(ns)); return 1; }
+    s = natsConnection_ConnectTo(&nc, url);
+    if (s != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(s)); return 1; }
 
-    ns = natsConnection_JetStream(&js, nc, NULL);
-    if (ns != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(ns)); goto done; }
+    s = natsConnection_JetStream(&js, nc, NULL);
+    if (s != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(s)); goto done; }
 
     // Create regional streams and the global aggregation stream.
-    ns = _createRegionalStream(js, "METRICS_US_EAST", "metrics.us-east.>");
-    if (ns != NATS_OK) goto done;
+    s = _createRegionalStream(js, "METRICS_US_EAST", "metrics.us-east.>");
+    if (s != NATS_OK) goto done;
     printf("Created US-East metrics stream\n");
 
-    ns = _createRegionalStream(js, "METRICS_US_WEST", "metrics.us-west.>");
-    if (ns != NATS_OK) goto done;
+    s = _createRegionalStream(js, "METRICS_US_WEST", "metrics.us-west.>");
+    if (s != NATS_OK) goto done;
     printf("Created US-West metrics stream\n");
 
-    ns = _createRegionalStream(js, "METRICS_EU", "metrics.eu.>");
-    if (ns != NATS_OK) goto done;
+    s = _createRegionalStream(js, "METRICS_EU", "metrics.eu.>");
+    if (s != NATS_OK) goto done;
     printf("Created EU metrics stream\n");
 
-    ns = _createGlobalStream(js);
-    if (ns != NATS_OK) goto done;
+    s = _createGlobalStream(js);
+    if (s != NATS_OK) goto done;
     printf("Created Global aggregation stream with sources from all regions\n\n");
 
     // Get counters for each stream.
     s = natsCounter_GetFromStream(&usEast, js, "METRICS_US_EAST");
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     s = natsCounter_GetFromStream(&usWest, js, "METRICS_US_WEST");
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     s = natsCounter_GetFromStream(&eu, js, "METRICS_EU");
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     s = natsCounter_GetFromStream(&global, js, "METRICS_GLOBAL");
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
 
     // Simulate regional traffic.
     printf("=== Simulating Regional Traffic ===\n\n");
 
     printf("US-East region:\n");
     s = natsCounter_Add(usEast, "metrics.us-east.api.requests", 1500, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  API requests: %lld\n", value);
     s = natsCounter_Add(usEast, "metrics.us-east.api.errors", 23, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  API errors:   %lld\n", value);
     s = natsCounter_Add(usEast, "metrics.us-east.db.queries", 3200, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  DB queries:   %lld\n\n", value);
 
     printf("US-West region:\n");
     s = natsCounter_Add(usWest, "metrics.us-west.api.requests", 2100, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  API requests: %lld\n", value);
     s = natsCounter_Add(usWest, "metrics.us-west.api.errors", 15, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  API errors:   %lld\n", value);
     s = natsCounter_Add(usWest, "metrics.us-west.db.queries", 4500, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  DB queries:   %lld\n\n", value);
 
     printf("EU region:\n");
     s = natsCounter_Add(eu, "metrics.eu.api.requests", 800, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  API requests: %lld\n", value);
     s = natsCounter_Add(eu, "metrics.eu.api.errors", 7, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  API errors:   %lld\n", value);
     s = natsCounter_Add(eu, "metrics.eu.db.queries", 1600, &value);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("  DB queries:   %lld\n\n", value);
 
     // TODO: nats_Sleep(500) to allow source propagation before reading globals.
@@ -178,17 +177,17 @@ int main(int argc, char **argv)
     printf("=== Global Aggregated View ===\n\n");
 
     s = natsCounter_Get(global, "metrics.global.api.requests", &entry);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("Total API Requests: %s (aggregated)\n", natsCounterEntry_ValueStr(entry));
     natsCounterEntry_Destroy(entry); entry = NULL;
 
     s = natsCounter_Get(global, "metrics.global.api.errors", &entry);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("Total API Errors:   %s (aggregated)\n", natsCounterEntry_ValueStr(entry));
     natsCounterEntry_Destroy(entry); entry = NULL;
 
     s = natsCounter_Get(global, "metrics.global.db.queries", &entry);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
     printf("Total DB Queries:   %s (aggregated)\n", natsCounterEntry_ValueStr(entry));
     natsCounterEntry_Destroy(entry); entry = NULL;
 
@@ -196,7 +195,7 @@ int main(int argc, char **argv)
     printf("\n=== Source Breakdown ===\n\n");
 
     s = natsCounter_Get(global, "metrics.global.api.requests", &entry);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
 
     printf("API Requests by region:\n");
     if (natsCounterEntry_HasSources(entry))
@@ -215,14 +214,9 @@ done:
     if (js != NULL) jsCtx_Destroy(js);
     if (nc != NULL) natsConnection_Destroy(nc);
 
-    if (s != ORBIT_COUNTERS_OK)
+    if (s != NATS_OK)
     {
-        printf("Error: %s\n", orbitCountersStatus_GetText(s));
-        return 1;
-    }
-    if (ns != NATS_OK)
-    {
-        printf("Error: %s\n", natsStatus_GetText(ns));
+        printf("Error: %s\n", natsStatus_GetText(s));
         return 1;
     }
 

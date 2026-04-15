@@ -242,15 +242,13 @@ _makeUniqueDir(char *buf, int bufLen, const char *prefix)
 // JetStream setup / teardown macros
 //
 // JS_SETUP declares local variables, starts a nats-server with -js, connects,
-// and creates a JetStream context.  The test function must declare
-// `natsStatus s = NATS_OK;` before using these macros (used only for the
-// nats connection/JetStream setup, not for counter operations).
+// and creates a JetStream context.
 //
 // JS_TEARDOWN cleans up all resources.
 //-----------------------------------------------------------------------------
 
 #define JS_SETUP                                                            \
-natsStatus      ns   = NATS_OK;                                             \
+natsStatus      s    = NATS_OK;                                             \
 natsConnection  *nc  = NULL;                                                \
 jsCtx           *js  = NULL;                                                \
 natsPid         pid  = NATS_INVALID_PID;                                    \
@@ -265,12 +263,12 @@ CHECK_SERVER_STARTED(pid);                                                  \
 testCond(true);                                                             \
                                                                             \
 test("Connect: ");                                                          \
-ns = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");               \
-testCond(ns == NATS_OK);                                                    \
+s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");                \
+testCond(s == NATS_OK);                                                     \
                                                                             \
 test("Get context: ");                                                      \
-ns = natsConnection_JetStream(&js, nc, NULL);                               \
-testCond(ns == NATS_OK);
+s = natsConnection_JetStream(&js, nc, NULL);                                \
+testCond(s == NATS_OK);
 
 #define JS_TEARDOWN                     \
 jsCtx_Destroy(js);                      \
@@ -514,13 +512,10 @@ test_ParseIncrementInvalid(void)
 void
 test_CounterGetFromStreamDirectNotEnabled(void)
 {
-    natsStatus          ns = NATS_OK;
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    jsStreamConfig      cfg;
-    natsCounter        *c = NULL;
+    natsStatus      s  = NATS_OK;
+    jsStreamConfig  cfg;
+    natsCounter    *c = NULL;
 
-    // JS_SETUP uses 'ns' for nats connection setup internally.
-    // We shadow the macro's `s` by pre-declaring `ns`.
     natsConnection  *nc  = NULL;
     jsCtx           *js  = NULL;
     natsPid         pid  = NATS_INVALID_PID;
@@ -535,12 +530,12 @@ test_CounterGetFromStreamDirectNotEnabled(void)
     testCond(true);
 
     test("Connect: ");
-    ns = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");
-    testCond(ns == NATS_OK);
+    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");
+    testCond(s == NATS_OK);
 
     test("Get context: ");
-    ns = natsConnection_JetStream(&js, nc, NULL);
-    testCond(ns == NATS_OK);
+    s = natsConnection_JetStream(&js, nc, NULL);
+    testCond(s == NATS_OK);
 
     test("Create stream without AllowDirect: ");
     jsStreamConfig_Init(&cfg);
@@ -548,12 +543,12 @@ test_CounterGetFromStreamDirectNotEnabled(void)
     cfg.Subjects    = (const char*[1]){"nd.>"};
     cfg.SubjectsLen = 1;
     cfg.AllowDirect = false;
-    ns = js_AddStream(NULL, js, &cfg, NULL, NULL);
-    testCond(ns == NATS_OK);
+    s = js_AddStream(NULL, js, &cfg, NULL, NULL);
+    testCond(s == NATS_OK);
 
     test("GetFromStream fails when AllowDirect is false: ");
     s = natsCounter_GetFromStream(&c, js, "NO_DIRECT");
-    testCond(s == ORBIT_COUNTERS_INVALID_CONFIG);
+    testCond(s == NATS_INVALID_CONFIG);
 
     JS_TEARDOWN;
 }
@@ -561,10 +556,9 @@ test_CounterGetFromStreamDirectNotEnabled(void)
 void
 test_CounterGetFromStreamCounterNotEnabled(void)
 {
-    natsStatus          ns = NATS_OK;
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    jsStreamConfig      cfg;
-    natsCounter        *c = NULL;
+    natsStatus      s  = NATS_OK;
+    jsStreamConfig  cfg;
+    natsCounter    *c = NULL;
 
     natsConnection  *nc  = NULL;
     jsCtx           *js  = NULL;
@@ -580,12 +574,12 @@ test_CounterGetFromStreamCounterNotEnabled(void)
     testCond(true);
 
     test("Connect: ");
-    ns = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");
-    testCond(ns == NATS_OK);
+    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");
+    testCond(s == NATS_OK);
 
     test("Get context: ");
-    ns = natsConnection_JetStream(&js, nc, NULL);
-    testCond(ns == NATS_OK);
+    s = natsConnection_JetStream(&js, nc, NULL);
+    testCond(s == NATS_OK);
 
     test("Create stream without AllowMsgCounter: ");
     jsStreamConfig_Init(&cfg);
@@ -594,12 +588,12 @@ test_CounterGetFromStreamCounterNotEnabled(void)
     cfg.SubjectsLen     = 1;
     cfg.AllowDirect     = true;
     cfg.AllowMsgCounter = false;
-    ns = js_AddStream(NULL, js, &cfg, NULL, NULL);
-    testCond(ns == NATS_OK);
+    s = js_AddStream(NULL, js, &cfg, NULL, NULL);
+    testCond(s == NATS_OK);
 
     test("GetFromStream fails when AllowMsgCounter is false: ");
     s = natsCounter_GetFromStream(&c, js, "NO_COUNTER");
-    testCond(s == ORBIT_COUNTERS_INVALID_CONFIG);
+    testCond(s == NATS_INVALID_CONFIG);
 
     JS_TEARDOWN;
 }
@@ -607,27 +601,26 @@ test_CounterGetFromStreamCounterNotEnabled(void)
 void
 test_CounterAddIncrementsValue(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "ADD", "add.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "ADD", "add.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "ADD");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Add 5: ");
     s = natsCounter_Add(c, "add.hits", 5, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 5));
+    testCond((s == NATS_OK) && (val == 5));
 
     test("Add 3 more: ");
     s = natsCounter_Add(c, "add.hits", 3, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 8));
+    testCond((s == NATS_OK) && (val == 8));
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
@@ -636,27 +629,26 @@ test_CounterAddIncrementsValue(void)
 void
 test_CounterAddNegativeDecrementsValue(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "ADDNEG", "addneg.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "ADDNEG", "addneg.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "ADDNEG");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Add 10: ");
     s = natsCounter_Add(c, "addneg.x", 10, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 10));
+    testCond((s == NATS_OK) && (val == 10));
 
     test("Add -3: ");
     s = natsCounter_Add(c, "addneg.x", -3, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 7));
+    testCond((s == NATS_OK) && (val == 7));
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
@@ -665,33 +657,32 @@ test_CounterAddNegativeDecrementsValue(void)
 void
 test_CounterAddIntReturnsString(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    char               *val = NULL;
+    natsCounter *c   = NULL;
+    char        *val = NULL;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "ADDINT", "addint.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "ADDINT", "addint.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "ADDINT");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("AddInt 5 returns string \"5\": ");
     s = natsCounter_AddInt(c, "addint.x", 5, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val != NULL) && (strcmp(val, "5") == 0));
+    testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "5") == 0));
     free(val); val = NULL;
 
     test("AddInt 3 returns string \"8\": ");
     s = natsCounter_AddInt(c, "addint.x", 3, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val != NULL) && (strcmp(val, "8") == 0));
+    testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "8") == 0));
     free(val); val = NULL;
 
     test("AddInt -2 returns string \"6\": ");
     s = natsCounter_AddInt(c, "addint.x", -2, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val != NULL) && (strcmp(val, "6") == 0));
+    testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "6") == 0));
     free(val);
 
     natsCounter_Destroy(c);
@@ -701,23 +692,22 @@ test_CounterAddIntReturnsString(void)
 void
 test_CounterIncrementByOne(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "INCR", "incr.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "INCR", "incr.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "INCR");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Increment returns 1: ");
     s = natsCounter_Increment(c, "incr.a", &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 1));
+    testCond((s == NATS_OK) && (val == 1));
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
@@ -726,27 +716,26 @@ test_CounterIncrementByOne(void)
 void
 test_CounterDecrementByOne(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "DECR", "decr.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "DECR", "decr.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "DECR");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Seed with 10: ");
     s = natsCounter_Add(c, "decr.a", 10, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 10));
+    testCond((s == NATS_OK) && (val == 10));
 
     test("Decrement returns 9: ");
     s = natsCounter_Decrement(c, "decr.a", &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 9));
+    testCond((s == NATS_OK) && (val == 9));
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
@@ -755,28 +744,27 @@ test_CounterDecrementByOne(void)
 void
 test_CounterLoadReturnsCurrentValue(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "LOAD", "load.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "LOAD", "load.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "LOAD");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Seed with 42: ");
     s = natsCounter_Add(c, "load.x", 42, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 42));
+    testCond((s == NATS_OK) && (val == 42));
 
     test("Load returns 42: ");
     val = 0;
     s = natsCounter_Load(c, "load.x", &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 42));
+    testCond((s == NATS_OK) && (val == 42));
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
@@ -785,28 +773,27 @@ test_CounterLoadReturnsCurrentValue(void)
 void
 test_CounterGetReturnsEntry(void)
 {
-    orbitCountersStatus s     = ORBIT_COUNTERS_OK;
-    natsCounter        *c     = NULL;
-    natsCounterEntry   *entry = NULL;
-    long long           val   = 0;
+    natsCounter      *c     = NULL;
+    natsCounterEntry *entry = NULL;
+    long long         val   = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "GETENTRY", "ge.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "GETENTRY", "ge.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "GETENTRY");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Seed with 7: ");
     s = natsCounter_Add(c, "ge.x", 7, &val);
-    testCond((s == ORBIT_COUNTERS_OK) && (val == 7));
+    testCond((s == NATS_OK) && (val == 7));
 
     test("Get entry: ");
     s = natsCounter_Get(c, "ge.x", &entry);
-    testCond((s == ORBIT_COUNTERS_OK) && (entry != NULL)
+    testCond((s == NATS_OK) && (entry != NULL)
              && (strcmp(natsCounterEntry_Subject(entry), "ge.x") == 0)
              && (strcmp(natsCounterEntry_ValueStr(entry), "7") == 0)
              && natsCounterEntry_HasIncrement(entry));
@@ -819,23 +806,22 @@ test_CounterGetReturnsEntry(void)
 void
 test_CounterGetMissingSubject(void)
 {
-    orbitCountersStatus s     = ORBIT_COUNTERS_OK;
-    natsCounter        *c     = NULL;
-    natsCounterEntry   *entry = NULL;
+    natsCounter      *c     = NULL;
+    natsCounterEntry *entry = NULL;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "GETMISS", "gm.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "GETMISS", "gm.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "GETMISS");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Get missing subject returns NOT_FOUND: ");
     s = natsCounter_Get(c, "gm.nonexistent", &entry);
-    testCond(s == ORBIT_COUNTERS_NOT_FOUND);
+    testCond(s == NATS_NOT_FOUND);
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
@@ -846,10 +832,10 @@ typedef struct { int count; } BatchTestCtx;
 
 static void
 _batchTestHandler(natsCounter *c, natsCounterEntry *entry,
-                  orbitCountersStatus s, void *closure)
+                  natsStatus s, void *closure)
 {
     BatchTestCtx *ctx = (BatchTestCtx *)closure;
-    if (s != ORBIT_COUNTERS_OK || entry == NULL)
+    if (s != NATS_OK || entry == NULL)
         return;
     ctx->count++;
     (void)c;
@@ -858,32 +844,31 @@ _batchTestHandler(natsCounter *c, natsCounterEntry *entry,
 void
 test_CounterGetMultipleBatch(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "BATCH", "batch.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "BATCH", "batch.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "BATCH");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Populate 3 subjects: ");
     s = natsCounter_Add(c, "batch.a", 1, &val);
-    if (s == ORBIT_COUNTERS_OK) s = natsCounter_Add(c, "batch.b", 2, &val);
-    if (s == ORBIT_COUNTERS_OK) s = natsCounter_Add(c, "batch.c", 3, &val);
-    testCond(s == ORBIT_COUNTERS_OK);
+    if (s == NATS_OK) s = natsCounter_Add(c, "batch.b", 2, &val);
+    if (s == NATS_OK) s = natsCounter_Add(c, "batch.c", 3, &val);
+    testCond(s == NATS_OK);
 
     test("GetMultiple returns 3 entries: ");
     {
         const char   *subjects[] = {"batch.a", "batch.b", "batch.c"};
         BatchTestCtx  ctx = {0};
         s = natsCounter_GetMultiple(c, subjects, 3, _batchTestHandler, &ctx);
-        testCond((s == ORBIT_COUNTERS_OK) && (ctx.count == 3));
+        testCond((s == NATS_OK) && (ctx.count == 3));
     }
 
     natsCounter_Destroy(c);
@@ -893,24 +878,23 @@ test_CounterGetMultipleBatch(void)
 void
 test_CounterGetMultipleEmpty(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
+    natsCounter *c = NULL;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "BATCHEM", "batchem.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "BATCHEM", "batchem.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "BATCHEM");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("GetMultiple with 0 subjects signals completion only: ");
     {
         BatchTestCtx ctx = {0};
         s = natsCounter_GetMultiple(c, NULL, 0, _batchTestHandler, &ctx);
-        testCond((s == ORBIT_COUNTERS_OK) && (ctx.count == 0));
+        testCond((s == NATS_OK) && (ctx.count == 0));
     }
 
     natsCounter_Destroy(c);
@@ -920,41 +904,206 @@ test_CounterGetMultipleEmpty(void)
 void
 test_CounterGetMultipleSkipsMissing(void)
 {
-    orbitCountersStatus s  = ORBIT_COUNTERS_OK;
-    natsCounter        *c  = NULL;
-    long long           val = 0;
+    natsCounter *c   = NULL;
+    long long    val = 0;
 
     JS_SETUP;
 
     test("Create counter stream: ");
-    ns = _createStream(js, "BATCHMISS", "bm.>");
-    testCond(ns == NATS_OK);
+    s = _createStream(js, "BATCHMISS", "bm.>");
+    testCond(s == NATS_OK);
 
     test("Get counter: ");
     s = natsCounter_GetFromStream(&c, js, "BATCHMISS");
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("Populate 1 subject: ");
     s = natsCounter_Add(c, "bm.exists", 1, &val);
-    testCond(s == ORBIT_COUNTERS_OK);
+    testCond(s == NATS_OK);
 
     test("GetMultiple skips missing: ");
     {
         const char   *subjects[] = {"bm.exists", "bm.missing"};
         BatchTestCtx  ctx = {0};
         s = natsCounter_GetMultiple(c, subjects, 2, _batchTestHandler, &ctx);
-        testCond((s == ORBIT_COUNTERS_OK) && (ctx.count == 1));
+        testCond((s == NATS_OK) && (ctx.count == 1));
     }
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
 }
 
-// TODO: Add integration tests for:
-// - Source tracking (multi-stream setup with subject transforms, verify
-//   natsCounterEntry_HasSources/IterSources).
-// - natsCounter_AddStr / natsCounter_LoadStr direct string operations.
-// - ORBIT_COUNTERS_OVERFLOW when counter value exceeds long long range.
+// Source iteration callback closure.
+typedef struct
+{
+    int   count;
+    char  streams[8][64];
+    char  subjects[8][64];
+    char  values[8][64];
+} SourceTestCtx;
+
+static void
+_sourceTestHandler(const char *stream, const char *subject, const char *value,
+                   void *closure)
+{
+    SourceTestCtx *ctx = (SourceTestCtx *)closure;
+    if (ctx->count < 8)
+    {
+        snprintf(ctx->streams[ctx->count],  64, "%s", stream);
+        snprintf(ctx->subjects[ctx->count], 64, "%s", subject);
+        snprintf(ctx->values[ctx->count],   64, "%s", value);
+    }
+    ctx->count++;
+}
+
+void
+test_CounterSourceTracking(void)
+{
+    natsCounter      *regional = NULL;
+    natsCounter      *global   = NULL;
+    natsCounterEntry *entry    = NULL;
+    long long         val      = 0;
+    SourceTestCtx     srcCtx   = {0};
+    jsStreamConfig    cfg;
+    jsStreamSource    src;
+    jsStreamSource   *srcArr[1];
+
+    JS_SETUP;
+
+    // Create a regional counter stream.
+    test("Create regional stream: ");
+    s = _createStream(js, "REGION_A", "region.a.>");
+    testCond(s == NATS_OK);
+
+    // Create a global stream that sources from REGION_A.
+    // The sourced messages arrive with Nats-Stream-Source header,
+    // causing the server to populate Nats-Counter-Sources.
+    test("Create global stream sourcing from REGION_A: ");
+    jsStreamConfig_Init(&cfg);
+    cfg.Name            = "GLOBAL";
+    cfg.AllowDirect     = true;
+    cfg.AllowMsgCounter = true;
+    jsStreamSource_Init(&src);
+    src.Name = "REGION_A";
+    srcArr[0] = &src;
+    cfg.Sources    = srcArr;
+    cfg.SourcesLen = 1;
+    s = js_AddStream(NULL, js, &cfg, NULL, NULL);
+    testCond(s == NATS_OK);
+
+    // Publish to regional counter.
+    test("Get regional counter: ");
+    s = natsCounter_GetFromStream(&regional, js, "REGION_A");
+    testCond(s == NATS_OK);
+
+    test("Add 42 to regional counter: ");
+    s = natsCounter_Add(regional, "region.a.hits", 42, &val);
+    testCond((s == NATS_OK) && (val == 42));
+
+    // Wait for sourcing to propagate.
+    nats_Sleep(500);
+
+    // Read global entry — should have source tracking.
+    test("Get global counter: ");
+    s = natsCounter_GetFromStream(&global, js, "GLOBAL");
+    testCond(s == NATS_OK);
+
+    test("Global entry has value 42: ");
+    s = natsCounter_Get(global, "region.a.hits", &entry);
+    testCond((s == NATS_OK) && (entry != NULL)
+             && (strcmp(natsCounterEntry_ValueStr(entry), "42") == 0));
+
+    test("Global entry has sources: ");
+    testCond(natsCounterEntry_HasSources(entry));
+
+    test("IterSources yields REGION_A contribution: ");
+    s = natsCounterEntry_IterSources(entry, _sourceTestHandler, &srcCtx);
+    testCond((s == NATS_OK) && (srcCtx.count == 1)
+             && (strcmp(srcCtx.streams[0], "REGION_A") == 0)
+             && (strcmp(srcCtx.subjects[0], "region.a.hits") == 0)
+             && (strcmp(srcCtx.values[0], "42") == 0));
+
+    natsCounterEntry_Destroy(entry);
+    natsCounter_Destroy(regional);
+    natsCounter_Destroy(global);
+    JS_TEARDOWN;
+}
+
+void
+test_CounterAddStrAndLoadStr(void)
+{
+    natsCounter *c      = NULL;
+    char        *val    = NULL;
+    char        *loaded = NULL;
+
+    JS_SETUP;
+
+    test("Create counter stream: ");
+    s = _createStream(js, "STROPS", "strops.>");
+    testCond(s == NATS_OK);
+
+    test("Get counter: ");
+    s = natsCounter_GetFromStream(&c, js, "STROPS");
+    testCond(s == NATS_OK);
+
+    test("AddStr \"+100\" returns \"100\": ");
+    s = natsCounter_AddStr(c, "strops.x", "+100", &val);
+    testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "100") == 0));
+    free(val); val = NULL;
+
+    test("AddStr \"-30\" returns \"70\": ");
+    s = natsCounter_AddStr(c, "strops.x", "-30", &val);
+    testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "70") == 0));
+    free(val); val = NULL;
+
+    test("LoadStr returns \"70\": ");
+    s = natsCounter_LoadStr(c, "strops.x", &loaded);
+    testCond((s == NATS_OK) && (loaded != NULL) && (strcmp(loaded, "70") == 0));
+    free(loaded);
+
+    natsCounter_Destroy(c);
+    JS_TEARDOWN;
+}
+
+void
+test_CounterLargeValueExceedsLongLong(void)
+{
+    natsCounter      *c     = NULL;
+    natsCounterEntry *entry = NULL;
+    char             *val   = NULL;
+    long long         llval = 0;
+    // A value larger than LLONG_MAX (9223372036854775807).
+    const char *bigDelta = "+99999999999999999999999999999999";
+
+    JS_SETUP;
+
+    test("Create counter stream: ");
+    s = _createStream(js, "BIGVAL", "bigval.>");
+    testCond(s == NATS_OK);
+
+    test("Get counter: ");
+    s = natsCounter_GetFromStream(&c, js, "BIGVAL");
+    testCond(s == NATS_OK);
+
+    test("AddStr with huge value succeeds: ");
+    s = natsCounter_AddStr(c, "bigval.x", bigDelta, &val);
+    testCond((s == NATS_OK) && (val != NULL)
+             && (strcmp(val, "99999999999999999999999999999999") == 0));
+    free(val);
+
+    test("ValueStr returns the large value: ");
+    s = natsCounter_Get(c, "bigval.x", &entry);
+    testCond((s == NATS_OK) && (entry != NULL)
+             && (strcmp(natsCounterEntry_ValueStr(entry), "99999999999999999999999999999999") == 0));
+
+    test("Value() returns NATS_ERR for overflow: ");
+    s = natsCounterEntry_Value(entry, &llval);
+    testCond(s == NATS_ERR);
+
+    natsCounterEntry_Destroy(entry);
+    natsCounter_Destroy(c);
+    JS_TEARDOWN;
+}
 
 //=============================================================================
 // Unit tests — entry accessors (no server needed)
@@ -963,8 +1112,8 @@ test_CounterGetMultipleSkipsMissing(void)
 void
 test_EntryAccessorsNull(void)
 {
-    orbitCountersStatus s;
-    long long           val = 0;
+    natsStatus s;
+    long long  val = 0;
 
     test("Subject(NULL) returns NULL: ");
     testCond(natsCounterEntry_Subject(NULL) == NULL);
@@ -974,7 +1123,7 @@ test_EntryAccessorsNull(void)
 
     test("Value(NULL) returns INVALID_ARG: ");
     s = natsCounterEntry_Value(NULL, &val);
-    testCond(s == ORBIT_COUNTERS_INVALID_ARG);
+    testCond(s == NATS_INVALID_ARG);
 
     test("HasIncrement(NULL) returns false: ");
     testCond(natsCounterEntry_HasIncrement(NULL) == false);
@@ -984,14 +1133,14 @@ test_EntryAccessorsNull(void)
 
     test("Increment(NULL) returns INVALID_ARG: ");
     s = natsCounterEntry_Increment(NULL, &val);
-    testCond(s == ORBIT_COUNTERS_INVALID_ARG);
+    testCond(s == NATS_INVALID_ARG);
 
     test("HasSources(NULL) returns false: ");
     testCond(natsCounterEntry_HasSources(NULL) == false);
 
     test("IterSources(NULL) returns INVALID_ARG: ");
     s = natsCounterEntry_IterSources(NULL, NULL, NULL);
-    testCond(s == ORBIT_COUNTERS_INVALID_ARG);
+    testCond(s == NATS_INVALID_ARG);
 
     test("Destroy(NULL) does not crash: ");
     natsCounterEntry_Destroy(NULL);

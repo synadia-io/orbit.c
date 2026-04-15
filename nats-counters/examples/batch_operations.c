@@ -33,18 +33,18 @@
 // Closure passed to the batch callback to accumulate results.
 typedef struct
 {
-    int                 count;
-    orbitCountersStatus lastError;
-    bool                done;
+    int         count;
+    natsStatus  lastError;
+    bool        done;
 } BatchCtx;
 
 static void
 _onEntry(natsCounter *counter, natsCounterEntry *entry,
-         orbitCountersStatus status, void *closure)
+         natsStatus status, void *closure)
 {
     BatchCtx *ctx = (BatchCtx *)closure;
 
-    if (status != ORBIT_COUNTERS_OK)
+    if (status != NATS_OK)
     {
         ctx->lastError = status;
         ctx->done      = true;
@@ -70,14 +70,13 @@ _onEntry(natsCounter *counter, natsCounterEntry *entry,
 
 int main(int argc, char **argv)
 {
-    natsStatus           ns      = NATS_OK;
-    orbitCountersStatus  s       = ORBIT_COUNTERS_OK;
-    natsConnection      *nc      = NULL;
-    jsCtx               *js      = NULL;
-    natsCounter         *counter = NULL;
-    long long            value   = 0;
-    BatchCtx             ctx     = {0};
-    const char          *url     = (argc > 1) ? argv[1] : URL;
+    natsStatus       s       = NATS_OK;
+    natsConnection  *nc      = NULL;
+    jsCtx           *js      = NULL;
+    natsCounter     *counter = NULL;
+    long long        value   = 0;
+    BatchCtx         ctx     = {0};
+    const char      *url     = (argc > 1) ? argv[1] : URL;
 
     static const char *SERVICES[] = { "auth", "api", "db", "cache" };
     static const char *METRICS[]  = { "requests", "errors", "latency_ms" };
@@ -92,22 +91,22 @@ int main(int argc, char **argv)
 
     if (subjects == NULL || subjectBuf == NULL)
     {
-        s = ORBIT_COUNTERS_NO_MEMORY;
+        s = NATS_NO_MEMORY;
         goto done;
     }
 
     printf("=== Adding Counter Values ===\n\n");
 
-    ns = natsConnection_ConnectTo(&nc, url);
-    if (ns != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(ns)); return 1; }
+    s = natsConnection_ConnectTo(&nc, url);
+    if (s != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(s)); return 1; }
 
-    ns = natsConnection_JetStream(&js, nc, NULL);
-    if (ns != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(ns)); goto done; }
+    s = natsConnection_JetStream(&js, nc, NULL);
+    if (s != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(s)); goto done; }
 
     // TODO: Create or bind the stream (AllowMsgCounter + AllowDirect).
 
     s = natsCounter_GetFromStream(&counter, js, STREAM_NAME);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
 
     // Populate counters
     for (i = 0; i < N_SVC; i++)
@@ -127,7 +126,7 @@ int main(int argc, char **argv)
                 val = 50 + (long long)(strlen(SERVICES[i]) * 5);
 
             s = natsCounter_Add(counter, buf, val, &value);
-            if (s != ORBIT_COUNTERS_OK) goto done;
+            if (s != NATS_OK) goto done;
             printf("  %s = %lld\n", buf, value);
 
             subjectBuf[idx] = strdup(buf);
@@ -143,12 +142,12 @@ int main(int argc, char **argv)
     ctx.count = 0;
     ctx.done  = false;
     s = natsCounter_GetMultiple(counter, subjects, numSubjects, _onEntry, &ctx);
-    if (s != ORBIT_COUNTERS_OK) goto done;
+    if (s != NATS_OK) goto done;
 
     // TODO: In a real implementation natsCounter_GetMultiple() may be
     //       asynchronous; wait for ctx.done before proceeding.
 
-    if (ctx.lastError != ORBIT_COUNTERS_OK)
+    if (ctx.lastError != NATS_OK)
     {
         s = ctx.lastError;
         goto done;
@@ -166,9 +165,9 @@ done:
     if (js != NULL) jsCtx_Destroy(js);
     if (nc != NULL) natsConnection_Destroy(nc);
 
-    if (s != ORBIT_COUNTERS_OK)
+    if (s != NATS_OK)
     {
-        printf("Error: %s\n", orbitCountersStatus_GetText(s));
+        printf("Error: %s\n", natsStatus_GetText(s));
         return 1;
     }
 
