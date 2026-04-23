@@ -37,9 +37,10 @@ extern "C" {
  */
 #define NATS_COUNTER_SOURCES_HDR    "Nats-Counter-Sources"
 
-/**
- * @name types
- * @{
+/** \defgroup counterTypesGroup Types
+ *
+ *  Counter types.
+ *  @{
  */
 
 /** \brief Wraps a JetStream stream configured with allow_msg_counter.
@@ -54,16 +55,23 @@ struct natsCounterSource;
 /** \brief Holds a snapshot of a counter at a point in time.
  *
  * Includes its value, last increment, and source-tracking state.
- * Obtain from #natsCounter_Get().
- * Destroy with #natsCounterEntry_Destroy().
+ * Obtain from #natsCounter_Get(); destroy with #natsCounterEntry_Destroy().
  */
 typedef struct __natsCounterEntry {
-    char                      *subject;   ///> Stream subject.
-    char                      *value;     ///> decimal string, arbitrary precision.
-    char                      *increment; ///> decimal string; NULL if header absent.
-    struct natsCounterSource  *sources;   ///> linked list; NULL if header absent.
+    char                      *subject;   ///< Stream subject.
+    char                      *value;     ///< Decimal string, arbitrary precision.
+    char                      *increment; ///< Decimal string; NULL if header absent.
+    struct natsCounterSource  *sources;   ///< Linked list; NULL if header absent.
 
-}  natsCounterEntry;
+} natsCounterEntry;
+
+/** @} */ // end counterTypesGroup
+
+/** \defgroup counterCallbacksGroup Callbacks
+ *
+ *  Counter callbacks.
+ *  @{
+ */
 
 /** \brief Callback invoked once per result by #natsCounter_GetMultiple().
  *
@@ -303,8 +311,8 @@ natsStatus natsCounter_GetMultiple(natsCounter       *counter,
 
 /** \defgroup counterAccessorsGroup Entry Accessors
  *
- *  All accessors return pointers into memory owned by `entry` and remain valid
- *  until #natsCounterEntry_Destroy() is called.
+ *  Predicates and iterators over #natsCounterEntry.  Read the `subject`,
+ *  `value`, `increment`, and `sources` fields of the entry directly.
  *  @{
  */
 
