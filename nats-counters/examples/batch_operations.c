@@ -58,11 +58,11 @@ _onEntry(natsCounter *counter, natsCounterEntry *entry,
         return;
     }
 
-    printf("  %-40s = %s", natsCounterEntry_Subject(entry),
-           natsCounterEntry_ValueStr(entry));
+    printf("  %-40s = %s", entry->subject,
+           entry->value);
 
     if (natsCounterEntry_HasIncrement(entry))
-        printf("  (last incr: %s)", natsCounterEntry_IncrementStr(entry));
+        printf("  (last incr: %s)", entry->increment);
 
     printf("\n");
     ctx->count++;
@@ -98,12 +98,23 @@ int main(int argc, char **argv)
     printf("=== Adding Counter Values ===\n\n");
 
     s = natsConnection_ConnectTo(&nc, url);
-    if (s != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(s)); return 1; }
+    if (s != NATS_OK) goto done;
 
     s = natsConnection_JetStream(&js, nc, NULL);
-    if (s != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(s)); goto done; }
+    if (s != NATS_OK) goto done;
 
-    // TODO: Create or bind the stream (AllowMsgCounter + AllowDirect).
+    // Create the stream (ignore error if it already exists).
+    {
+        jsStreamConfig cfg;
+
+        jsStreamConfig_Init(&cfg);
+        cfg.Name            = STREAM_NAME;
+        cfg.Subjects        = (const char *[]){"metrics.>"};
+        cfg.SubjectsLen     = 1;
+        cfg.AllowMsgCounter = true;
+        cfg.AllowDirect     = true;
+        js_AddStream(NULL, js, &cfg, NULL, NULL);
+    }
 
     s = natsCounter_GetFromStream(&counter, js, STREAM_NAME);
     if (s != NATS_OK) goto done;
@@ -143,9 +154,6 @@ int main(int argc, char **argv)
     ctx.done  = false;
     s = natsCounter_GetMultiple(counter, subjects, numSubjects, _onEntry, &ctx);
     if (s != NATS_OK) goto done;
-
-    // TODO: In a real implementation natsCounter_GetMultiple() may be
-    //       asynchronous; wait for ctx.done before proceeding.
 
     if (ctx.lastError != NATS_OK)
     {

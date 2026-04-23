@@ -38,7 +38,7 @@ extern "C" {
 #define NATS_COUNTER_SOURCES_HDR    "Nats-Counter-Sources"
 
 /**
- * @name Opaque types
+ * @name types
  * @{
  */
 
@@ -49,24 +49,21 @@ extern "C" {
  */
 typedef struct __natsCounter        natsCounter;
 
+struct natsCounterSource;
+
 /** \brief Holds a snapshot of a counter at a point in time.
  *
  * Includes its value, last increment, and source-tracking state.
  * Obtain from #natsCounter_Get().
  * Destroy with #natsCounterEntry_Destroy().
  */
-typedef struct __natsCounterEntry   natsCounterEntry;
+typedef struct __natsCounterEntry {
+    char                      *subject;   ///> Stream subject.
+    char                      *value;     ///> decimal string, arbitrary precision.
+    char                      *increment; ///> decimal string; NULL if header absent.
+    struct natsCounterSource  *sources;   ///> linked list; NULL if header absent.
 
-/** @} */
-
-//
-// Callbacks.
-//
-/** \defgroup counterCallbacksGroup Callbacks
- *
- *  Counter callbacks.
- *  @{
- */
+}  natsCounterEntry;
 
 /** \brief Callback invoked once per result by #natsCounter_GetMultiple().
  *
@@ -311,30 +308,6 @@ natsStatus natsCounter_GetMultiple(natsCounter       *counter,
  *  @{
  */
 
-/** \brief Returns the counter's subject name.
- *
- * @param entry the entry.
- * @return the subject string, or `NULL` if `entry` is `NULL`.
- */
-const char *natsCounterEntry_Subject(natsCounterEntry *entry);
-
-/** \brief Returns the current counter value as a decimal string (arbitrary
- * precision).
- *
- * @param entry the entry.
- * @return the value string, or `NULL` if `entry` is `NULL`.
- */
-const char *natsCounterEntry_ValueStr(natsCounterEntry *entry);
-
-/** \brief Fills `*value` with the current counter total.
- *
- * @param entry the entry.
- * @param value receives the counter total.
- * @return #NATS_OK on success, #NATS_ERR if the
- * value exceeds the range of `long long`.
- */
-natsStatus natsCounterEntry_Value(natsCounterEntry *entry, long long *value);
-
 /** \brief Returns `true` when the fetched message carries a Nats-Incr header.
  *
  * Always `true` for live counter messages.
@@ -343,23 +316,6 @@ natsStatus natsCounterEntry_Value(natsCounterEntry *entry, long long *value);
  * @return `true` if an increment is present.
  */
 bool natsCounterEntry_HasIncrement(natsCounterEntry *entry);
-
-/** \brief Returns the most recent increment as a decimal string.
- *
- * @param entry the entry.
- * @return the increment string, or `NULL` if no increment is present.
- */
-const char *natsCounterEntry_IncrementStr(natsCounterEntry *entry);
-
-/** \brief Fills `*increment` with the most recent increment.
- *
- * @param entry the entry.
- * @param increment receives the increment value.
- * @return #NATS_OK on success, #NATS_NOT_FOUND if no
- * increment is present, #NATS_ERR if the value exceeds
- * `long long`.
- */
-natsStatus natsCounterEntry_Increment(natsCounterEntry *entry, long long *increment);
 
 /** \brief Returns `true` when the entry carries a Nats-Counter-Sources header.
  *

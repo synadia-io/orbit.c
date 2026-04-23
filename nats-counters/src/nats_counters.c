@@ -20,41 +20,12 @@
 #include <errno.h>
 #include <limits.h>
 
-//-----------------------------------------------------------------------------
-// Internal struct definitions
-//-----------------------------------------------------------------------------
-
 struct __natsCounter
 {
     jsCtx      *js;
     char       *stream; // owned copy of the stream name
 
 };
-
-struct __natsCounterEntry
-{
-    char               *subject;
-    char               *value;     // decimal string, arbitrary precision
-    char               *increment; // decimal string; NULL if header absent
-    natsCounterSource  *sources;   // linked list; NULL if header absent
-
-};
-
-//-----------------------------------------------------------------------------
-// Helpers
-//-----------------------------------------------------------------------------
-
-// _counter_formatDelta formats a long long delta as a signed decimal string
-// suitable for the Nats-Incr header (e.g., "+5" or "-3").
-// dst must be at least 22 bytes.
-static void
-_counter_formatDelta(char *dst, long long delta)
-{
-    if (delta >= 0)
-        snprintf(dst, 24, "+%lld", delta);
-    else
-        snprintf(dst, 24, "%lld", delta);
-}
 
 // _counter_parseLL converts a decimal string produced by the server into a
 // long long.  Returns NATS_ERR when the value is out of range or unparseable.
@@ -77,10 +48,6 @@ _counter_parseLL(const char *str, long long *out)
 
     return NATS_OK;
 }
-
-//-----------------------------------------------------------------------------
-// Counter lifecycle
-//-----------------------------------------------------------------------------
 
 natsStatus
 natsCounter_GetFromStream(natsCounter **counter,
@@ -146,7 +113,7 @@ natsCounter_Add(natsCounter *counter,
     char       *valStr = NULL;
     natsStatus  s;
 
-    _counter_formatDelta(deltaStr, delta);
+    snprintf(deltaStr, 24, "%lld", delta);
     s = natsCounter_AddStr(counter, subject, deltaStr, &valStr);
     if (s != NATS_OK)
         return s;
@@ -164,7 +131,7 @@ natsCounter_AddInt(natsCounter  *counter,
 {
     char deltaStr[24];
 
-    _counter_formatDelta(deltaStr, delta);
+    snprintf(deltaStr, 24, "%lld", delta);
     return natsCounter_AddStr(counter, subject, deltaStr, newValue);
 }
 
@@ -255,7 +222,7 @@ natsCounter_LoadStr(natsCounter  *counter,
     if (s != NATS_OK)
         return s;
 
-    *value = strdup(natsCounterEntry_ValueStr(entry));
+    *value = strdup(entry->value);
     natsCounterEntry_Destroy(entry);
 
     return (*value != NULL) ? NATS_OK : NATS_NO_MEMORY;
@@ -383,53 +350,11 @@ natsCounter_GetMultiple(natsCounter       *counter,
     return NATS_OK;
 }
 
-//-----------------------------------------------------------------------------
-// Entry accessors
-//-----------------------------------------------------------------------------
-
-const char *
-natsCounterEntry_Subject(natsCounterEntry *entry)
-{
-    return (entry != NULL) ? entry->subject : NULL;
-}
-
-const char *
-natsCounterEntry_ValueStr(natsCounterEntry *entry)
-{
-    return (entry != NULL) ? entry->value : NULL;
-}
-
-natsStatus
-natsCounterEntry_Value(natsCounterEntry *entry, long long *value)
-{
-    if (entry == NULL || value == NULL)
-        return NATS_INVALID_ARG;
-
-    return _counter_parseLL(entry->value, value);
-}
 
 bool
 natsCounterEntry_HasIncrement(natsCounterEntry *entry)
 {
     return (entry != NULL) && (entry->increment != NULL);
-}
-
-const char *
-natsCounterEntry_IncrementStr(natsCounterEntry *entry)
-{
-    return (entry != NULL) ? entry->increment : NULL;
-}
-
-natsStatus
-natsCounterEntry_Increment(natsCounterEntry *entry, long long *increment)
-{
-    if (entry == NULL || increment == NULL)
-        return NATS_INVALID_ARG;
-
-    if (entry->increment == NULL)
-        return NATS_NOT_FOUND;
-
-    return _counter_parseLL(entry->increment, increment);
 }
 
 bool

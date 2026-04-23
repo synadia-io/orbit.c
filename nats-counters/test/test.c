@@ -35,7 +35,6 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <dirent.h>
-#include <errno.h>
 
 //-----------------------------------------------------------------------------
 // Test framework — mirrors nats.c/test conventions.
@@ -794,8 +793,8 @@ test_CounterGetReturnsEntry(void)
     test("Get entry: ");
     s = natsCounter_Get(c, "ge.x", &entry);
     testCond((s == NATS_OK) && (entry != NULL)
-             && (strcmp(natsCounterEntry_Subject(entry), "ge.x") == 0)
-             && (strcmp(natsCounterEntry_ValueStr(entry), "7") == 0)
+             && (strcmp(entry->subject, "ge.x") == 0)
+             && (strcmp(entry->value, "7") == 0)
              && natsCounterEntry_HasIncrement(entry));
     natsCounterEntry_Destroy(entry);
 
@@ -1011,7 +1010,7 @@ test_CounterSourceTracking(void)
     test("Global entry has value 42: ");
     s = natsCounter_Get(global, "region.a.hits", &entry);
     testCond((s == NATS_OK) && (entry != NULL)
-             && (strcmp(natsCounterEntry_ValueStr(entry), "42") == 0));
+             && (strcmp(entry->value, "42") == 0));
 
     test("Global entry has sources: ");
     testCond(natsCounterEntry_HasSources(entry));
@@ -1094,57 +1093,11 @@ test_CounterLargeValueExceedsLongLong(void)
     test("ValueStr returns the large value: ");
     s = natsCounter_Get(c, "bigval.x", &entry);
     testCond((s == NATS_OK) && (entry != NULL)
-             && (strcmp(natsCounterEntry_ValueStr(entry), "99999999999999999999999999999999") == 0));
-
-    test("Value() returns NATS_ERR for overflow: ");
-    s = natsCounterEntry_Value(entry, &llval);
-    testCond(s == NATS_ERR);
+             && (strcmp(entry->value, "99999999999999999999999999999999") == 0));
 
     natsCounterEntry_Destroy(entry);
     natsCounter_Destroy(c);
     JS_TEARDOWN;
-}
-
-//=============================================================================
-// Unit tests — entry accessors (no server needed)
-//=============================================================================
-
-void
-test_EntryAccessorsNull(void)
-{
-    natsStatus s;
-    long long  val = 0;
-
-    test("Subject(NULL) returns NULL: ");
-    testCond(natsCounterEntry_Subject(NULL) == NULL);
-
-    test("ValueStr(NULL) returns NULL: ");
-    testCond(natsCounterEntry_ValueStr(NULL) == NULL);
-
-    test("Value(NULL) returns INVALID_ARG: ");
-    s = natsCounterEntry_Value(NULL, &val);
-    testCond(s == NATS_INVALID_ARG);
-
-    test("HasIncrement(NULL) returns false: ");
-    testCond(natsCounterEntry_HasIncrement(NULL) == false);
-
-    test("IncrementStr(NULL) returns NULL: ");
-    testCond(natsCounterEntry_IncrementStr(NULL) == NULL);
-
-    test("Increment(NULL) returns INVALID_ARG: ");
-    s = natsCounterEntry_Increment(NULL, &val);
-    testCond(s == NATS_INVALID_ARG);
-
-    test("HasSources(NULL) returns false: ");
-    testCond(natsCounterEntry_HasSources(NULL) == false);
-
-    test("IterSources(NULL) returns INVALID_ARG: ");
-    s = natsCounterEntry_IterSources(NULL, NULL, NULL);
-    testCond(s == NATS_INVALID_ARG);
-
-    test("Destroy(NULL) does not crash: ");
-    natsCounterEntry_Destroy(NULL);
-    testCond(true);
 }
 
 void

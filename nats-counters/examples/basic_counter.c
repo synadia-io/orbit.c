@@ -50,19 +50,23 @@ int main(int argc, char **argv)
 
     // Connect
     s = natsConnection_ConnectTo(&nc, url);
-    if (s != NATS_OK) { printf("Connect error: %s\n", natsStatus_GetText(s)); return 1; }
+    if (s != NATS_OK) goto done;
 
     s = natsConnection_JetStream(&js, nc, NULL);
-    if (s != NATS_OK) { printf("JetStream error: %s\n", natsStatus_GetText(s)); goto done; }
+    if (s != NATS_OK) goto done;
 
-    // TODO: Create or bind the stream.
-    //   jsStreamConfig cfg      = {0};
-    //   cfg.Name                = STREAM_NAME;
-    //   cfg.Subjects            = (const char *[]){"events.*"};
-    //   cfg.SubjectsLen         = 1;
-    //   cfg.AllowMsgCounter     = true;
-    //   cfg.AllowDirect         = true;
-    //   js_AddStream(NULL, js, &cfg, NULL); // ignore error if already exists
+    // Create the stream (ignore error if it already exists).
+    {
+        jsStreamConfig cfg;
+
+        jsStreamConfig_Init(&cfg);
+        cfg.Name            = STREAM_NAME;
+        cfg.Subjects        = (const char *[]){"events.*"};
+        cfg.SubjectsLen     = 1;
+        cfg.AllowMsgCounter = true;
+        cfg.AllowDirect     = true;
+        js_AddStream(NULL, js, &cfg, NULL, NULL);
+    }
 
     s = natsCounter_GetFromStream(&counter, js, STREAM_NAME);
     if (s != NATS_OK) goto done;
@@ -114,11 +118,11 @@ int main(int argc, char **argv)
     s = natsCounter_Get(counter, "events.clicks", &entry);
     if (s != NATS_OK) goto done;
 
-    printf("  Subject: %s\n", natsCounterEntry_Subject(entry));
-    printf("  Value:   %s\n", natsCounterEntry_ValueStr(entry));
+    printf("  Subject: %s\n", entry->subject);
+    printf("  Value:   %s\n", entry->value);
 
     if (natsCounterEntry_HasIncrement(entry))
-        printf("  Last increment: %s\n", natsCounterEntry_IncrementStr(entry));
+        printf("  Last increment: %s\n", entry->increment);
 
     if (natsCounterEntry_HasSources(entry))
     {

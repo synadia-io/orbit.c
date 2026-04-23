@@ -271,17 +271,16 @@ _parseNestedObj(const char *json, int jsonLen, natsCounterSource **head)
                 free(stream); free(subject); free(val);
                 return NATS_NO_MEMORY;
             }
-            node->stream  = strdup(stream);
+            node->stream = strdup(stream);
+            if (node->stream == NULL)
+            {
+                free(stream); free(subject); free(val); free(node);
+                return NATS_NO_MEMORY;
+            }
             node->subject = subject;
             node->value   = val;
             node->next    = *head;
             *head = node;
-
-            if (node->stream == NULL)
-            {
-                free(stream);
-                return NATS_NO_MEMORY;
-            }
         }
         free(stream);
     }
