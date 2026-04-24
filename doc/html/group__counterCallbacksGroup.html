@@ -98,7 +98,7 @@ Typedefs</h2></td></tr>
 <tr class="memitem:gaef89d27887dbdaff998b0ea2969fc76c" id="r_gaef89d27887dbdaff998b0ea2969fc76c"><td class="memItemLeft">typedef void(*&#160;</td><td class="memItemRight"><a class="el" href="#gaef89d27887dbdaff998b0ea2969fc76c">natsCounterIterFn</a>) (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, <a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry, natsStatus status, void *closure)</td></tr>
 <tr class="memdesc:gaef89d27887dbdaff998b0ea2969fc76c"><td class="mdescLeft">&#160;</td><td class="mdescRight">Callback invoked once per result by <a class="el" href="group__counterEntryGroup.html#gaece4532d35550ba645e830529b4c49ad" title="Fetches counter entries for multiple subjects in a single batch.">natsCounter_GetMultiple()</a>.  <br /></td></tr>
 <tr class="memitem:ga192c23a95f3c45188551f1ed23f1234e" id="r_ga192c23a95f3c45188551f1ed23f1234e"><td class="memItemLeft">typedef void(*&#160;</td><td class="memItemRight"><a class="el" href="#ga192c23a95f3c45188551f1ed23f1234e">natsCounterSourceIterFn</a>) (const char *stream, const char *subject, const char *value, void *closure)</td></tr>
-<tr class="memdesc:ga192c23a95f3c45188551f1ed23f1234e"><td class="mdescLeft">&#160;</td><td class="mdescRight">Callback invoked once per source contribution by <a class="el" href="group__counterAccessorsGroup.html#ga1e5e386fe93e7693df173091a8eebf1b" title="Iterates over each per-source contribution in the entry.">natsCounterEntry_IterSources()</a>.  <br /></td></tr>
+<tr class="memdesc:ga192c23a95f3c45188551f1ed23f1234e"><td class="mdescLeft">&#160;</td><td class="mdescRight">Callback invoked once per source contribution by <a class="el" href="group__counterEntryGroup.html#ga1e5e386fe93e7693df173091a8eebf1b" title="Iterates over each per-source contribution in the entry.">natsCounterEntry_IterSources()</a>.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Counter callbacks. </p>
@@ -140,7 +140,7 @@ Typedefs</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p>Callback invoked once per source contribution by <a class="el" href="group__counterAccessorsGroup.html#ga1e5e386fe93e7693df173091a8eebf1b" title="Iterates over each per-source contribution in the entry.">natsCounterEntry_IterSources()</a>. </p>
+<p>Callback invoked once per source contribution by <a class="el" href="group__counterEntryGroup.html#ga1e5e386fe93e7693df173091a8eebf1b" title="Iterates over each per-source contribution in the entry.">natsCounterEntry_IterSources()</a>. </p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
     <tr><td class="paramname">stream</td><td>source stream name. </td></tr>

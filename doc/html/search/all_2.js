@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['callbacks_0',['Callbacks',['../group__counterCallbacksGroup.html',1,'']]]
+  ['entry_20operations_0',['Entry Operations',['../group__counterEntryGroup.html',1,'']]]
 ];

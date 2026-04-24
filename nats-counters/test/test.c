@@ -1070,7 +1070,6 @@ test_CounterLargeValueExceedsLongLong(void)
     natsCounter      *c     = NULL;
     natsCounterEntry *entry = NULL;
     char             *val   = NULL;
-    long long         llval = 0;
     // A value larger than LLONG_MAX (9223372036854775807).
     const char *bigDelta = "+99999999999999999999999999999999";
 

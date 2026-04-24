@@ -211,7 +211,7 @@ natsStatus natsCounter_Decrement(natsCounter *counter,
  *
  * @param counter the counter.
  * @param subject the subject to read.
- * @param value receives the current total.
+ * @param value receives the current total. The value will not be modified on error.
  * @return #NATS_OK on success, #NATS_ERR if the
  * value exceeds `long long`.
  */
@@ -290,9 +290,12 @@ natsStatus natsCounter_Get(natsCounter      *counter,
  * The `handler` callback is invoked once per result, in an unspecified order.
  * Non-existent subjects are silently skipped. When all results have been
  * delivered, the callback is invoked one final time with
- * status=#NATS_OK and entry=`NULL` to signal completion.
+ * a null entry to signal completion.
  *
- * `subjects` may contain NATS wildcard tokens; see ADR-49 for details.
+ * `subjects` may contain NATS wildcard tokens.
+ *
+ * \Note: Currently this function issues one request per subject internally. This
+ *        will be updated to use batch fetch once implemented into orbit.c.
  *
  * @param counter the counter.
  * @param subjects array of subject strings.
@@ -306,15 +309,6 @@ natsStatus natsCounter_GetMultiple(natsCounter       *counter,
                                    int                numSubjects,
                                    natsCounterIterFn  handler,
                                    void              *closure);
-
-/** @} */ // end counterEntryGroup
-
-/** \defgroup counterAccessorsGroup Entry Accessors
- *
- *  Predicates and iterators over #natsCounterEntry.  Read the `subject`,
- *  `value`, `increment`, and `sources` fields of the entry directly.
- *  @{
- */
 
 /** \brief Returns `true` when the fetched message carries a Nats-Incr header.
  *
@@ -356,7 +350,7 @@ natsStatus natsCounterEntry_IterSources(natsCounterEntry        *entry,
  */
 void natsCounterEntry_Destroy(natsCounterEntry *entry);
 
-/** @} */ // end counterAccessorsGroup
+/** @} */ // end counterEntryGroup
 
 /** @} */ // end counterFuncGroup
 

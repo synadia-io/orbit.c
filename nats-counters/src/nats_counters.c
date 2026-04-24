@@ -33,12 +33,13 @@ static natsStatus
 _counter_parseLL(const char *str, long long *out)
 {
     char *end = NULL;
+    long long val;
 
     if (str == NULL || *str == '\0')
         return NATS_ERR;
 
     errno = 0;
-    *out = strtoll(str, &end, 10);
+    val = strtoll(str, &end, 10);
 
     if (errno == ERANGE)
         return NATS_ERR;
@@ -46,6 +47,7 @@ _counter_parseLL(const char *str, long long *out)
     if (*end != '\0')
         return NATS_ERR;
 
+    *out = val;
     return NATS_OK;
 }
 
@@ -113,7 +115,7 @@ natsCounter_Add(natsCounter *counter,
     char       *valStr = NULL;
     natsStatus  s;
 
-    snprintf(deltaStr, 24, "%lld", delta);
+    snprintf(deltaStr, sizeof(deltaStr), "%lld", delta);
     s = natsCounter_AddStr(counter, subject, deltaStr, &valStr);
     if (s != NATS_OK)
         return s;
@@ -131,7 +133,7 @@ natsCounter_AddInt(natsCounter  *counter,
 {
     char deltaStr[24];
 
-    snprintf(deltaStr, 24, "%lld", delta);
+    snprintf(deltaStr, sizeof(deltaStr), "%lld", delta);
     return natsCounter_AddStr(counter, subject, deltaStr, newValue);
 }
 
@@ -197,8 +199,6 @@ natsCounter_AddStr(natsCounter  *counter,
         return s;
     }
 
-    // Publish via JetStream. The PubAck includes the counter value
-    // post-increment in the "val" field (ADR-49).
     s = js_PublishMsg(&pa, counter->js, msg, NULL, NULL);
     natsMsg_Destroy(msg);
     if (s != NATS_OK)
@@ -260,7 +260,13 @@ natsCounter_Get(natsCounter      *counter,
         return NATS_NO_MEMORY;
     }
 
-    // Subject — use the subject from the stored message.
+    if (natsMsg_GetSubject(msg) == NULL)
+    {
+        natsMsg_Destroy(msg);
+        natsCounterEntry_Destroy(e);
+        return NATS_ERR;
+    }
+
     e->subject = strdup(natsMsg_GetSubject(msg));
     if (e->subject == NULL)
     {
@@ -281,7 +287,7 @@ natsCounter_Get(natsCounter      *counter,
         if (natsMsgHeader_Get(msg, NATS_COUNTER_INCREMENT_HDR, &hdr) == NATS_OK
             && hdr != NULL)
         {
-            natsCounterParser_ParseIncrement(hdr, &e->increment);
+            s = natsCounterParser_ParseIncrement(hdr, &e->increment);
         }
     }
 
@@ -292,7 +298,7 @@ natsCounter_Get(natsCounter      *counter,
         if (natsMsgHeader_Get(msg, NATS_COUNTER_SOURCES_HDR, &hdr) == NATS_OK
             && hdr != NULL)
         {
-            natsCounterParser_ParseSources(hdr, &e->sources);
+            s = natsCounterParser_ParseSources(hdr, &e->sources);
         }
     }
 
@@ -305,7 +311,7 @@ natsCounter_Get(natsCounter      *counter,
     }
 
     natsCounterEntry_Destroy(e);
-    return NATS_ERR;
+    return s;
 }
 
 natsStatus
@@ -320,20 +326,17 @@ natsCounter_GetMultiple(natsCounter       *counter,
 
     if (subjects == NULL || numSubjects <= 0)
     {
-        // Signal completion immediately.
         handler(counter, NULL, NATS_OK, closure);
         return NATS_OK;
     }
 
-    // TODO: Use a single batch direct-get request instead of looping
-    // with individual natsCounter_Get calls.
     for (int i = 0; i < numSubjects; i++)
     {
         natsCounterEntry *entry = NULL;
         natsStatus        s = natsCounter_Get(counter, subjects[i], &entry);
 
-        if (s == NATS_NOT_FOUND)
-            continue; // non-existent subjects are silently skipped
+        if (s == NATS_NOT_FOUND || entry == NULL)
+            continue;
 
         if (s != NATS_OK)
         {

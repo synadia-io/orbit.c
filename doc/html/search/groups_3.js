@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['functions_0',['Functions',['../group__counterFuncGroup.html',1,'']]]
+  ['integer_20operations_0',['Integer Operations',['../group__counterIntGroup.html',1,'']]]
 ];

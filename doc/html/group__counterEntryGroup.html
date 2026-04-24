@@ -99,6 +99,14 @@ Functions</h2></td></tr>
 <tr class="memdesc:ga8a08bf8603a15bba3eed6253be3250b5"><td class="mdescLeft">&#160;</td><td class="mdescRight">Fetches the full counter entry for <span class="tt">subject</span>.  <br /></td></tr>
 <tr class="memitem:gaece4532d35550ba645e830529b4c49ad" id="r_gaece4532d35550ba645e830529b4c49ad"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gaece4532d35550ba645e830529b4c49ad">natsCounter_GetMultiple</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char **subjects, int numSubjects, <a class="el" href="group__counterCallbacksGroup.html#gaef89d27887dbdaff998b0ea2969fc76c">natsCounterIterFn</a> handler, void *closure)</td></tr>
 <tr class="memdesc:gaece4532d35550ba645e830529b4c49ad"><td class="mdescLeft">&#160;</td><td class="mdescRight">Fetches counter entries for multiple subjects in a single batch.  <br /></td></tr>
+<tr class="memitem:gac0a03cd7acd026aeb3e65a02d8830885" id="r_gac0a03cd7acd026aeb3e65a02d8830885"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#gac0a03cd7acd026aeb3e65a02d8830885">natsCounterEntry_HasIncrement</a> (<a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry)</td></tr>
+<tr class="memdesc:gac0a03cd7acd026aeb3e65a02d8830885"><td class="mdescLeft">&#160;</td><td class="mdescRight">Returns <span class="tt">true</span> when the fetched message carries a Nats-Incr header.  <br /></td></tr>
+<tr class="memitem:ga1810a2f5ef1b1bf81079ac445b06b3ad" id="r_ga1810a2f5ef1b1bf81079ac445b06b3ad"><td class="memItemLeft">bool&#160;</td><td class="memItemRight"><a class="el" href="#ga1810a2f5ef1b1bf81079ac445b06b3ad">natsCounterEntry_HasSources</a> (<a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry)</td></tr>
+<tr class="memdesc:ga1810a2f5ef1b1bf81079ac445b06b3ad"><td class="mdescLeft">&#160;</td><td class="mdescRight">Returns <span class="tt">true</span> when the entry carries a Nats-Counter-Sources header.  <br /></td></tr>
+<tr class="memitem:ga1e5e386fe93e7693df173091a8eebf1b" id="r_ga1e5e386fe93e7693df173091a8eebf1b"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga1e5e386fe93e7693df173091a8eebf1b">natsCounterEntry_IterSources</a> (<a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry, <a class="el" href="group__counterCallbacksGroup.html#ga192c23a95f3c45188551f1ed23f1234e">natsCounterSourceIterFn</a> fn, void *closure)</td></tr>
+<tr class="memdesc:ga1e5e386fe93e7693df173091a8eebf1b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Iterates over each per-source contribution in the entry.  <br /></td></tr>
+<tr class="memitem:ga41a5d5c94a0393c1dc19ac8e2d6e39be" id="r_ga41a5d5c94a0393c1dc19ac8e2d6e39be"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#ga41a5d5c94a0393c1dc19ac8e2d6e39be">natsCounterEntry_Destroy</a> (<a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry)</td></tr>
+<tr class="memdesc:ga41a5d5c94a0393c1dc19ac8e2d6e39be"><td class="mdescLeft">&#160;</td><td class="mdescRight">Releases all resources owned by <span class="tt">entry</span>.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Fetch and inspect full counter entries. </p>
@@ -129,7 +137,7 @@ Functions</h2></td></tr>
 
 <p>Fetches the full counter entry for <span class="tt">subject</span>. </p>
 <p>Includes the current value, the last increment, and source tracking information.</p>
-<p>On success, <span class="tt">*entry</span> is set to a newly allocated <a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f" title="Holds a snapshot of a counter at a point in time.">natsCounterEntry</a>; the caller must destroy it with <a class="el" href="group__counterAccessorsGroup.html#ga41a5d5c94a0393c1dc19ac8e2d6e39be" title="Releases all resources owned by entry.">natsCounterEntry_Destroy()</a>.</p>
+<p>On success, <span class="tt">*entry</span> is set to a newly allocated <a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f" title="Holds a snapshot of a counter at a point in time.">natsCounterEntry</a>; the caller must destroy it with <a class="el" href="#ga41a5d5c94a0393c1dc19ac8e2d6e39be" title="Releases all resources owned by entry.">natsCounterEntry_Destroy()</a>.</p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
     <tr><td class="paramname">counter</td><td>the counter. </td></tr>
@@ -177,8 +185,9 @@ Functions</h2></td></tr>
 </div><div class="memdoc">
 
 <p>Fetches counter entries for multiple subjects in a single batch. </p>
-<p>The <span class="tt">handler</span> callback is invoked once per result, in an unspecified order. Non-existent subjects are silently skipped. When all results have been delivered, the callback is invoked one final time with status=#NATS_OK and entry=<span class="tt">NULL</span> to signal completion.</p>
-<p><span class="tt">subjects</span> may contain NATS wildcard tokens; see ADR-49 for details.</p>
+<p>The <span class="tt">handler</span> callback is invoked once per result, in an unspecified order. Non-existent subjects are silently skipped. When all results have been delivered, the callback is invoked one final time with a null entry to signal completion.</p>
+<p><span class="tt">subjects</span> may contain NATS wildcard tokens.</p>
+<p>\Note: Currently this function issues one request per subject internally. This will be updated to use batch fetch once implemented into orbit.c.</p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
     <tr><td class="paramname">counter</td><td>the counter. </td></tr>
@@ -186,6 +195,124 @@ Functions</h2></td></tr>
     <tr><td class="paramname">numSubjects</td><td>number of elements in <span class="tt">subjects</span>. </td></tr>
     <tr><td class="paramname">handler</td><td>callback invoked once per result. </td></tr>
     <tr><td class="paramname">closure</td><td>user-supplied pointer forwarded to <span class="tt">handler</span>. </td></tr>
+  </table>
+  </dd>
+</dl>
+<dl class="section return"><dt>Returns</dt><dd>#NATS_OK on success. </dd></dl>
+
+</div>
+</div>
+<a id="ga41a5d5c94a0393c1dc19ac8e2d6e39be" name="ga41a5d5c94a0393c1dc19ac8e2d6e39be"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga41a5d5c94a0393c1dc19ac8e2d6e39be">&#9670;&#160;</a></span>natsCounterEntry_Destroy()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">void natsCounterEntry_Destroy </td>
+          <td>(</td>
+          <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *</td>          <td class="paramname"><span class="paramname"><em>entry</em></span></td><td>)</td>
+          <td></td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Releases all resources owned by <span class="tt">entry</span>. </p>
+<p>Passing <span class="tt">NULL</span> is safe and is a no-op.</p>
+<dl class="params"><dt>Parameters</dt><dd>
+  <table class="params">
+    <tr><td class="paramname">entry</td><td>the entry to destroy, or <span class="tt">NULL</span>. </td></tr>
+  </table>
+  </dd>
+</dl>
+
+</div>
+</div>
+<a id="gac0a03cd7acd026aeb3e65a02d8830885" name="gac0a03cd7acd026aeb3e65a02d8830885"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#gac0a03cd7acd026aeb3e65a02d8830885">&#9670;&#160;</a></span>natsCounterEntry_HasIncrement()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">bool natsCounterEntry_HasIncrement </td>
+          <td>(</td>
+          <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *</td>          <td class="paramname"><span class="paramname"><em>entry</em></span></td><td>)</td>
+          <td></td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Returns <span class="tt">true</span> when the fetched message carries a Nats-Incr header. </p>
+<p>Always <span class="tt">true</span> for live counter messages.</p>
+<dl class="params"><dt>Parameters</dt><dd>
+  <table class="params">
+    <tr><td class="paramname">entry</td><td>the entry. </td></tr>
+  </table>
+  </dd>
+</dl>
+<dl class="section return"><dt>Returns</dt><dd><span class="tt">true</span> if an increment is present. </dd></dl>
+
+</div>
+</div>
+<a id="ga1810a2f5ef1b1bf81079ac445b06b3ad" name="ga1810a2f5ef1b1bf81079ac445b06b3ad"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga1810a2f5ef1b1bf81079ac445b06b3ad">&#9670;&#160;</a></span>natsCounterEntry_HasSources()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">bool natsCounterEntry_HasSources </td>
+          <td>(</td>
+          <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *</td>          <td class="paramname"><span class="paramname"><em>entry</em></span></td><td>)</td>
+          <td></td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Returns <span class="tt">true</span> when the entry carries a Nats-Counter-Sources header. </p>
+<p>This indicates the stream uses source-based aggregation.</p>
+<dl class="params"><dt>Parameters</dt><dd>
+  <table class="params">
+    <tr><td class="paramname">entry</td><td>the entry. </td></tr>
+  </table>
+  </dd>
+</dl>
+<dl class="section return"><dt>Returns</dt><dd><span class="tt">true</span> if sources are present. </dd></dl>
+
+</div>
+</div>
+<a id="ga1e5e386fe93e7693df173091a8eebf1b" name="ga1e5e386fe93e7693df173091a8eebf1b"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga1e5e386fe93e7693df173091a8eebf1b">&#9670;&#160;</a></span>natsCounterEntry_IterSources()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">natsStatus natsCounterEntry_IterSources </td>
+          <td>(</td>
+          <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *</td>          <td class="paramname"><span class="paramname"><em>entry</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="group__counterCallbacksGroup.html#ga192c23a95f3c45188551f1ed23f1234e">natsCounterSourceIterFn</a></td>          <td class="paramname"><span class="paramname"><em>fn</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">void *</td>          <td class="paramname"><span class="paramname"><em>closure</em></span>&#160;)</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Iterates over each per-source contribution in the entry. </p>
+<p>Invokes <span class="tt">fn</span> for each source stored in the Nats-Counter-Sources header. Does nothing if the entry has no sources.</p>
+<dl class="params"><dt>Parameters</dt><dd>
+  <table class="params">
+    <tr><td class="paramname">entry</td><td>the entry. </td></tr>
+    <tr><td class="paramname">fn</td><td>callback invoked once per source. </td></tr>
+    <tr><td class="paramname">closure</td><td>user-supplied pointer forwarded to <span class="tt">fn</span>. </td></tr>
   </table>
   </dd>
 </dl>

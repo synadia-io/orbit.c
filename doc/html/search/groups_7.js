@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['string_20operations_0',['String Operations',['../group__counterStrGroup.html',1,'']]]
+  ['types_0',['Types',['../group__counterTypesGroup.html',1,'']]]
 ];
