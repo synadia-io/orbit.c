@@ -1009,6 +1009,7 @@ test_CounterSourceTracking(void)
 
     test("Global entry has value 42: ");
     s = natsCounter_Get(global, "region.a.hits", &entry);
+    printf("s=%d entry=%p value=%s\n", (int)s, (void*)entry, (entry != NULL ? entry->value : "NULL"));
     testCond((s == NATS_OK) && (entry != NULL)
              && (strcmp(entry->value, "42") == 0));
 

@@ -17,22 +17,16 @@
 #include <string.h>
 #include <stdio.h>
 
-//-----------------------------------------------------------------------------
-// Validation helpers
-//-----------------------------------------------------------------------------
-
 // Returns true when s is a valid decimal integer string.
 // If requireSign is true, s must start with '+' or '-'.
 static bool
-_isValidNumber(const char *s, bool requireSign)
+_isValidNumber(const char *s)
 {
     if (s == NULL || *s == '\0')
         return false;
 
     if (*s == '+' || *s == '-')
         s++;
-    else if (requireSign)
-        return false;
 
     if (*s == '\0')
         return false;
@@ -44,13 +38,6 @@ _isValidNumber(const char *s, bool requireSign)
     }
     return true;
 }
-
-//-----------------------------------------------------------------------------
-// Minimal JSON helpers — just enough for the formats used by counters.
-//
-// We avoid depending on nats.c internal JSON functions (not part of the
-// public header) and instead hand-parse the small, well-defined formats.
-//-----------------------------------------------------------------------------
 
 static const char *
 _skipws(const char *p, const char *end)
@@ -287,11 +274,8 @@ _parseNestedObj(const char *json, int jsonLen, natsCounterSource **head)
     return NATS_OK;
 }
 
-// ---------------------------------------------------------------------------
-// natsCounterParser_ParseValue
-//
+
 // Expected body format: {"val":"<decimal>"}
-// ---------------------------------------------------------------------------
 natsStatus
 natsCounterParser_ParseValue(const unsigned char *data,
                               int                  dataLen,
@@ -307,7 +291,7 @@ natsCounterParser_ParseValue(const unsigned char *data,
     if (s != NATS_OK)
         return NATS_ERR;
 
-    if (!_isValidNumber(val, false))
+    if (!_isValidNumber(val))
     {
         free(val);
         return NATS_ERR;
@@ -317,9 +301,6 @@ natsCounterParser_ParseValue(const unsigned char *data,
     return NATS_OK;
 }
 
-// ---------------------------------------------------------------------------
-// natsCounterParser_ParsePubAckValue
-// ---------------------------------------------------------------------------
 natsStatus
 natsCounterParser_ParsePubAckValue(const char  *ackVal,
                                     char       **value)
@@ -327,19 +308,16 @@ natsCounterParser_ParsePubAckValue(const char  *ackVal,
     if (ackVal == NULL)
         return NATS_NOT_FOUND;
 
-    if (!_isValidNumber(ackVal, false))
+    if (!_isValidNumber(ackVal))
         return NATS_ERR;
 
     *value = strdup(ackVal);
     return (*value != NULL) ? NATS_OK : NATS_NO_MEMORY;
 }
 
-// ---------------------------------------------------------------------------
-// natsCounterParser_ParseSources
-//
+
 // Expected header format (JSON):
 //   {"STREAM_A":{"subject.a":"100"},"STREAM_B":{"subject.b":"200"}}
-// ---------------------------------------------------------------------------
 natsStatus
 natsCounterParser_ParseSources(const char         *headerValue,
                                 natsCounterSource **sources)
@@ -352,9 +330,6 @@ natsCounterParser_ParseSources(const char         *headerValue,
     return _parseNestedObj(headerValue, (int)strlen(headerValue), sources);
 }
 
-// ---------------------------------------------------------------------------
-// natsCounterParser_FreeSources
-// ---------------------------------------------------------------------------
 void
 natsCounterParser_FreeSources(natsCounterSource *sources)
 {
@@ -371,9 +346,6 @@ natsCounterParser_FreeSources(natsCounterSource *sources)
     }
 }
 
-// ---------------------------------------------------------------------------
-// natsCounterParser_ParseIncrement
-// ---------------------------------------------------------------------------
 natsStatus
 natsCounterParser_ParseIncrement(const char  *headerValue,
                                   char       **increment)
@@ -381,8 +353,7 @@ natsCounterParser_ParseIncrement(const char  *headerValue,
     if (headerValue == NULL)
         return NATS_NOT_FOUND;
 
-    // ADR-49 requires a sign prefix on Nats-Incr values: ^[+-]\d+$
-    if (!_isValidNumber(headerValue, true))
+    if (!_isValidNumber(headerValue))
         return NATS_ERR;
 
     *increment = strdup(headerValue);

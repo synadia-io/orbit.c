@@ -29,7 +29,7 @@ endif()
 
 option(ORBIT_COVERAGE "Code coverage" OFF)
 option(ORBIT_BUILD_DEV_MODE "Enable type safety checks" OFF)
-option(ORBIT_BUILD_EXAMPLES "Build examples" ON)
+option(ORBIT_BUILD_EXAMPLES "Build examples" OFF)
 option(ORBIT_BUILD_STATIC_EXAMPLES "Statically link examples" OFF)
 option(ORBIT_BUILD_LIB_STATIC "Build static library" ON)
 option(ORBIT_BUILD_LIB_SHARED "Build shared library" ON)
