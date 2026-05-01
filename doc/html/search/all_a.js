@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['value_0',['value',['../struct____natsCounterEntry.html#a5af9cda5aca5ba0f5415caf7d930a285',1,'__natsCounterEntry']]]
+  ['operations_0',['Operations',['../group__counterEntryGroup.html',1,'Entry Operations'],['../group__counterIntGroup.html',1,'Integer Operations'],['../group__counterStrGroup.html',1,'String Operations']]]
 ];

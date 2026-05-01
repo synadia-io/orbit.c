@@ -77,3 +77,4 @@ This is a list of the current utilities.
 | Module | Description                                   | Docs                        | Version |
 | ------ | --------------------------------------------- | --------------------------- | ------- |
 | nats counters | Distributed counters using JetStream | [README.md](nats-counters/README.md) |
+| jetstream extra | Batched DIRECT.GET on JetStream streams (sync + async) | [README.md](jetstream-extra/README.md) |

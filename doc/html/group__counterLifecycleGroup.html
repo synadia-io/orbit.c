@@ -89,28 +89,28 @@ $(function(){initNavTree('group__counterLifecycleGroup.html','',''); });
 </div>
 
 <div class="header">
-  <div class="headertitle"><div class="title">Lifecycle <div class="ingroups"><a class="el" href="group__counterFuncGroup.html">Functions</a></div></div></div>
+  <div class="headertitle"><div class="title">Lifecycle <div class="ingroups"><a class="el" href="group__NatsCounters.html">NATS Counters</a> &raquo; <a class="el" href="group__counterFuncGroup.html">Functions</a></div></div></div>
 </div><!--header-->
 <div class="contents">
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-func-members" class="groupheader"><a id="func-members" name="func-members"></a>
 Functions</h2></td></tr>
-<tr class="memitem:ga7ca41171e58d67b9ae96e09ba5360e08" id="r_ga7ca41171e58d67b9ae96e09ba5360e08"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga7ca41171e58d67b9ae96e09ba5360e08">natsCounter_GetFromStream</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> **counter, jsCtx *js, const char *stream)</td></tr>
-<tr class="memdesc:ga7ca41171e58d67b9ae96e09ba5360e08"><td class="mdescLeft">&#160;</td><td class="mdescRight">Creates a counter client for the named stream.  <br /></td></tr>
-<tr class="memitem:ga9f0a0debf02578ff9c1fe9b2ed3775c6" id="r_ga9f0a0debf02578ff9c1fe9b2ed3775c6"><td class="memItemLeft">void&#160;</td><td class="memItemRight"><a class="el" href="#ga9f0a0debf02578ff9c1fe9b2ed3775c6">natsCounter_Destroy</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter)</td></tr>
-<tr class="memdesc:ga9f0a0debf02578ff9c1fe9b2ed3775c6"><td class="mdescLeft">&#160;</td><td class="mdescRight">Releases all resources owned by <span class="tt">counter</span>.  <br /></td></tr>
+<tr class="memitem:ga7ba47e3d4ec043e8999c3a207376f572" id="r_ga7ba47e3d4ec043e8999c3a207376f572"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga7ba47e3d4ec043e8999c3a207376f572">natsCounter_GetFromStream</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> **counter, jsCtx *js, const char *stream)</td></tr>
+<tr class="memdesc:ga7ba47e3d4ec043e8999c3a207376f572"><td class="mdescLeft">&#160;</td><td class="mdescRight">Creates a counter client for the named stream.  <br /></td></tr>
+<tr class="memitem:gaa6370154efdc6350b312c6d8b9b32795" id="r_gaa6370154efdc6350b312c6d8b9b32795"><td class="memItemLeft">NATS_EXTERN void&#160;</td><td class="memItemRight"><a class="el" href="#gaa6370154efdc6350b312c6d8b9b32795">natsCounter_Destroy</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter)</td></tr>
+<tr class="memdesc:gaa6370154efdc6350b312c6d8b9b32795"><td class="mdescLeft">&#160;</td><td class="mdescRight">Releases all resources owned by <span class="tt">counter</span>.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Counter lifecycle management. </p>
 </div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Function Documentation</h2>
-<a id="ga9f0a0debf02578ff9c1fe9b2ed3775c6" name="ga9f0a0debf02578ff9c1fe9b2ed3775c6"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ga9f0a0debf02578ff9c1fe9b2ed3775c6">&#9670;&#160;</a></span>natsCounter_Destroy()</h2>
+<a id="gaa6370154efdc6350b312c6d8b9b32795" name="gaa6370154efdc6350b312c6d8b9b32795"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#gaa6370154efdc6350b312c6d8b9b32795">&#9670;&#160;</a></span>natsCounter_Destroy()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">void natsCounter_Destroy </td>
+          <td class="memname">NATS_EXTERN void natsCounter_Destroy </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *</td>          <td class="paramname"><span class="paramname"><em>counter</em></span></td><td>)</td>
           <td></td>
@@ -129,14 +129,14 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="ga7ca41171e58d67b9ae96e09ba5360e08" name="ga7ca41171e58d67b9ae96e09ba5360e08"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ga7ca41171e58d67b9ae96e09ba5360e08">&#9670;&#160;</a></span>natsCounter_GetFromStream()</h2>
+<a id="ga7ba47e3d4ec043e8999c3a207376f572" name="ga7ba47e3d4ec043e8999c3a207376f572"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga7ba47e3d4ec043e8999c3a207376f572">&#9670;&#160;</a></span>natsCounter_GetFromStream()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">natsStatus natsCounter_GetFromStream </td>
+          <td class="memname">NATS_EXTERN natsStatus natsCounter_GetFromStream </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> **</td>          <td class="paramname"><span class="paramname"><em>counter</em></span>, </td>
         </tr>
@@ -155,7 +155,7 @@ Functions</h2></td></tr>
 
 <p>Creates a counter client for the named stream. </p>
 <p>The stream must have both <span class="tt">allow_msg_counter</span> and <span class="tt">allow_direct</span> enabled.</p>
-<p>On success, <span class="tt">*counter</span> is set to a newly allocated <a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540" title="Wraps a JetStream stream configured with allow_msg_counter.">natsCounter</a>; the caller is responsible for destroying it with <a class="el" href="#ga9f0a0debf02578ff9c1fe9b2ed3775c6" title="Releases all resources owned by counter.">natsCounter_Destroy()</a>.</p>
+<p>On success, <span class="tt">*counter</span> is set to a newly allocated <a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540" title="Wraps a JetStream stream configured with allow_msg_counter.">natsCounter</a>; the caller is responsible for destroying it with <a class="el" href="#gaa6370154efdc6350b312c6d8b9b32795" title="Releases all resources owned by counter.">natsCounter_Destroy()</a>.</p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
     <tr><td class="paramname">counter</td><td>receives the newly allocated counter. </td></tr>

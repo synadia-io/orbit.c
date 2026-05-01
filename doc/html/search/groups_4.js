@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['lifecycle_0',['Lifecycle',['../group__counterLifecycleGroup.html',1,'']]]
+  ['integer_20operations_0',['Integer Operations',['../group__counterIntGroup.html',1,'']]]
 ];

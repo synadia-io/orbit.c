@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['functions_0',['Functions',['../group__counterFuncGroup.html',1,'']]]
+  ['entry_20operations_0',['Entry Operations',['../group__counterEntryGroup.html',1,'']]]
 ];

@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['natscountersource_0',['natsCounterSource',['../structnatsCounterSource.html',1,'']]]
+  ['jsbatchfetchoptions_0',['jsBatchFetchOptions',['../structjsBatchFetchOptions.html',1,'']]]
 ];

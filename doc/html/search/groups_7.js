@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['types_0',['Types',['../group__counterTypesGroup.html',1,'']]]
+  ['operations_0',['Operations',['../group__counterEntryGroup.html',1,'Entry Operations'],['../group__counterIntGroup.html',1,'Integer Operations'],['../group__counterStrGroup.html',1,'String Operations']]]
 ];

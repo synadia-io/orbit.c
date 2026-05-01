@@ -89,34 +89,34 @@ $(function(){initNavTree('group__counterIntGroup.html','',''); });
 </div>
 
 <div class="header">
-  <div class="headertitle"><div class="title">Integer Operations <div class="ingroups"><a class="el" href="group__counterFuncGroup.html">Functions</a></div></div></div>
+  <div class="headertitle"><div class="title">Integer Operations <div class="ingroups"><a class="el" href="group__NatsCounters.html">NATS Counters</a> &raquo; <a class="el" href="group__counterFuncGroup.html">Functions</a></div></div></div>
 </div><!--header-->
 <div class="contents">
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-func-members" class="groupheader"><a id="func-members" name="func-members"></a>
 Functions</h2></td></tr>
-<tr class="memitem:ga1c81a46c242c9f7e7ad740cc14952c89" id="r_ga1c81a46c242c9f7e7ad740cc14952c89"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga1c81a46c242c9f7e7ad740cc14952c89">natsCounter_Add</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long delta, long long *newValue)</td></tr>
-<tr class="memdesc:ga1c81a46c242c9f7e7ad740cc14952c89"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds <span class="tt">delta</span> to the counter for <span class="tt">subject</span>.  <br /></td></tr>
-<tr class="memitem:ga510e70adc0912517ab5fedd9253cd7ee" id="r_ga510e70adc0912517ab5fedd9253cd7ee"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga510e70adc0912517ab5fedd9253cd7ee">natsCounter_AddInt</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long delta, char **newValue)</td></tr>
-<tr class="memdesc:ga510e70adc0912517ab5fedd9253cd7ee"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds <span class="tt">delta</span> to the counter for <span class="tt">subject</span>, returning the result as an arbitrary-precision decimal string.  <br /></td></tr>
-<tr class="memitem:ga1fb4993c4b0955e72d2e57b9e31e7eda" id="r_ga1fb4993c4b0955e72d2e57b9e31e7eda"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga1fb4993c4b0955e72d2e57b9e31e7eda">natsCounter_Increment</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long *newValue)</td></tr>
-<tr class="memdesc:ga1fb4993c4b0955e72d2e57b9e31e7eda"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds 1 to the counter for <span class="tt">subject</span>.  <br /></td></tr>
-<tr class="memitem:gaf6f5dc8e6f0c451647256b169ae82bea" id="r_gaf6f5dc8e6f0c451647256b169ae82bea"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gaf6f5dc8e6f0c451647256b169ae82bea">natsCounter_Decrement</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long *newValue)</td></tr>
-<tr class="memdesc:gaf6f5dc8e6f0c451647256b169ae82bea"><td class="mdescLeft">&#160;</td><td class="mdescRight">Subtracts 1 from the counter for <span class="tt">subject</span>.  <br /></td></tr>
-<tr class="memitem:gae0c70d6bb87f0f1bc29094ffe299de5a" id="r_gae0c70d6bb87f0f1bc29094ffe299de5a"><td class="memItemLeft">natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gae0c70d6bb87f0f1bc29094ffe299de5a">natsCounter_Load</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long *value)</td></tr>
-<tr class="memdesc:gae0c70d6bb87f0f1bc29094ffe299de5a"><td class="mdescLeft">&#160;</td><td class="mdescRight">Reads the current total for <span class="tt">subject</span> without modifying it.  <br /></td></tr>
+<tr class="memitem:ga5bf05b4b006629988215b3c6ded0a5a4" id="r_ga5bf05b4b006629988215b3c6ded0a5a4"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga5bf05b4b006629988215b3c6ded0a5a4">natsCounter_Add</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long delta, long long *newValue)</td></tr>
+<tr class="memdesc:ga5bf05b4b006629988215b3c6ded0a5a4"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds <span class="tt">delta</span> to the counter for <span class="tt">subject</span>.  <br /></td></tr>
+<tr class="memitem:gadebd667c262a9d5e7777851054ac5015" id="r_gadebd667c262a9d5e7777851054ac5015"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gadebd667c262a9d5e7777851054ac5015">natsCounter_AddInt</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long delta, char **newValue)</td></tr>
+<tr class="memdesc:gadebd667c262a9d5e7777851054ac5015"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds <span class="tt">delta</span> to the counter for <span class="tt">subject</span>, returning the result as an arbitrary-precision decimal string.  <br /></td></tr>
+<tr class="memitem:ga736e24aec3b4749e702bf812b4dbc05b" id="r_ga736e24aec3b4749e702bf812b4dbc05b"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga736e24aec3b4749e702bf812b4dbc05b">natsCounter_Increment</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long *newValue)</td></tr>
+<tr class="memdesc:ga736e24aec3b4749e702bf812b4dbc05b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Adds 1 to the counter for <span class="tt">subject</span>.  <br /></td></tr>
+<tr class="memitem:gafea86d7a09fe61f33b81a2d122bb2a0d" id="r_gafea86d7a09fe61f33b81a2d122bb2a0d"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gafea86d7a09fe61f33b81a2d122bb2a0d">natsCounter_Decrement</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long *newValue)</td></tr>
+<tr class="memdesc:gafea86d7a09fe61f33b81a2d122bb2a0d"><td class="mdescLeft">&#160;</td><td class="mdescRight">Subtracts 1 from the counter for <span class="tt">subject</span>.  <br /></td></tr>
+<tr class="memitem:ga3d79872a6e2debf098d77de5ef6abc5d" id="r_ga3d79872a6e2debf098d77de5ef6abc5d"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga3d79872a6e2debf098d77de5ef6abc5d">natsCounter_Load</a> (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, const char *subject, long long *value)</td></tr>
+<tr class="memdesc:ga3d79872a6e2debf098d77de5ef6abc5d"><td class="mdescLeft">&#160;</td><td class="mdescRight">Reads the current total for <span class="tt">subject</span> without modifying it.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>These functions accept and return <span class="tt">long long</span> values. Use the <span class="tt">*Str</span> variants for counters that may exceed the range of <span class="tt">long long</span>. </p>
 </div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Function Documentation</h2>
-<a id="ga1c81a46c242c9f7e7ad740cc14952c89" name="ga1c81a46c242c9f7e7ad740cc14952c89"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ga1c81a46c242c9f7e7ad740cc14952c89">&#9670;&#160;</a></span>natsCounter_Add()</h2>
+<a id="ga5bf05b4b006629988215b3c6ded0a5a4" name="ga5bf05b4b006629988215b3c6ded0a5a4"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga5bf05b4b006629988215b3c6ded0a5a4">&#9670;&#160;</a></span>natsCounter_Add()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">natsStatus natsCounter_Add </td>
+          <td class="memname">NATS_EXTERN natsStatus natsCounter_Add </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *</td>          <td class="paramname"><span class="paramname"><em>counter</em></span>, </td>
         </tr>
@@ -153,14 +153,14 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="ga510e70adc0912517ab5fedd9253cd7ee" name="ga510e70adc0912517ab5fedd9253cd7ee"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ga510e70adc0912517ab5fedd9253cd7ee">&#9670;&#160;</a></span>natsCounter_AddInt()</h2>
+<a id="gadebd667c262a9d5e7777851054ac5015" name="gadebd667c262a9d5e7777851054ac5015"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#gadebd667c262a9d5e7777851054ac5015">&#9670;&#160;</a></span>natsCounter_AddInt()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">natsStatus natsCounter_AddInt </td>
+          <td class="memname">NATS_EXTERN natsStatus natsCounter_AddInt </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *</td>          <td class="paramname"><span class="paramname"><em>counter</em></span>, </td>
         </tr>
@@ -183,7 +183,8 @@ Functions</h2></td></tr>
 </div><div class="memdoc">
 
 <p>Adds <span class="tt">delta</span> to the counter for <span class="tt">subject</span>, returning the result as an arbitrary-precision decimal string. </p>
-<p>This is the C equivalent of Go's <span class="tt">AddInt(ctx, subject, value) (*big.Int, error)</span>. The delta is a convenient <span class="tt">long long</span>, but the returned value will never overflow because it is a heap-allocated decimal string.</p>
+<p>This is the C equivalent of Go's <span class="tt">AddInt(ctx, subject, value) (*big.Int,
+error)</span>. The delta is a convenient <span class="tt">long long</span>, but the returned value will never overflow because it is a heap-allocated decimal string.</p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
     <tr><td class="paramname">counter</td><td>the counter. </td></tr>
@@ -197,14 +198,14 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="gaf6f5dc8e6f0c451647256b169ae82bea" name="gaf6f5dc8e6f0c451647256b169ae82bea"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#gaf6f5dc8e6f0c451647256b169ae82bea">&#9670;&#160;</a></span>natsCounter_Decrement()</h2>
+<a id="gafea86d7a09fe61f33b81a2d122bb2a0d" name="gafea86d7a09fe61f33b81a2d122bb2a0d"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#gafea86d7a09fe61f33b81a2d122bb2a0d">&#9670;&#160;</a></span>natsCounter_Decrement()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">natsStatus natsCounter_Decrement </td>
+          <td class="memname">NATS_EXTERN natsStatus natsCounter_Decrement </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *</td>          <td class="paramname"><span class="paramname"><em>counter</em></span>, </td>
         </tr>
@@ -234,14 +235,14 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="ga1fb4993c4b0955e72d2e57b9e31e7eda" name="ga1fb4993c4b0955e72d2e57b9e31e7eda"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#ga1fb4993c4b0955e72d2e57b9e31e7eda">&#9670;&#160;</a></span>natsCounter_Increment()</h2>
+<a id="ga736e24aec3b4749e702bf812b4dbc05b" name="ga736e24aec3b4749e702bf812b4dbc05b"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga736e24aec3b4749e702bf812b4dbc05b">&#9670;&#160;</a></span>natsCounter_Increment()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">natsStatus natsCounter_Increment </td>
+          <td class="memname">NATS_EXTERN natsStatus natsCounter_Increment </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *</td>          <td class="paramname"><span class="paramname"><em>counter</em></span>, </td>
         </tr>
@@ -271,14 +272,14 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="gae0c70d6bb87f0f1bc29094ffe299de5a" name="gae0c70d6bb87f0f1bc29094ffe299de5a"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#gae0c70d6bb87f0f1bc29094ffe299de5a">&#9670;&#160;</a></span>natsCounter_Load()</h2>
+<a id="ga3d79872a6e2debf098d77de5ef6abc5d" name="ga3d79872a6e2debf098d77de5ef6abc5d"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga3d79872a6e2debf098d77de5ef6abc5d">&#9670;&#160;</a></span>natsCounter_Load()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">natsStatus natsCounter_Load </td>
+          <td class="memname">NATS_EXTERN natsStatus natsCounter_Load </td>
           <td>(</td>
           <td class="paramtype"><a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *</td>          <td class="paramname"><span class="paramname"><em>counter</em></span>, </td>
         </tr>

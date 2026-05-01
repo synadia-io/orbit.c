@@ -27,6 +27,15 @@ struct __natsCounter
 
 };
 
+static void
+_counter_formatDelta(char *dst, long long delta)
+{
+    if (delta >= 0)
+        snprintf(dst, 24, "+%lld", delta);
+    else
+        snprintf(dst, 24, "%lld", delta);
+}
+
 // _counter_parseLL converts a decimal string produced by the server into a
 // long long.  Returns NATS_ERR when the value is out of range or unparseable.
 static natsStatus
@@ -115,11 +124,10 @@ natsCounter_Add(natsCounter *counter,
     char       *valStr = NULL;
     natsStatus  s;
 
-    snprintf(deltaStr, sizeof(deltaStr), "%lld", delta);
+    _counter_formatDelta(deltaStr, delta);
     s = natsCounter_AddStr(counter, subject, deltaStr, &valStr);
     if (s != NATS_OK)
         return s;
-
     s = _counter_parseLL(valStr, newValue);
     free(valStr);
     return s;
@@ -133,7 +141,7 @@ natsCounter_AddInt(natsCounter  *counter,
 {
     char deltaStr[24];
 
-    snprintf(deltaStr, sizeof(deltaStr), "%lld", delta);
+    _counter_formatDelta(deltaStr, delta);
     return natsCounter_AddStr(counter, subject, deltaStr, newValue);
 }
 

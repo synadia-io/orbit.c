@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['callbacks_0',['Callbacks',['../group__counterCallbacksGroup.html',1,'']]]
+  ['batch_20fetch_0',['Batch Fetch',['../group__jsBatchFetchGroup.html',1,'']]]
 ];

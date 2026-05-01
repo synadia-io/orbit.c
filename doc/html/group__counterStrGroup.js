@@ -1,5 +1,5 @@
 var group__counterStrGroup =
 [
-    [ "natsCounter_AddStr", "group__counterStrGroup.html#gabc7ccba4bc1db4f882ca4a5d12041639", null ],
-    [ "natsCounter_LoadStr", "group__counterStrGroup.html#ga45641bdb0d0d7638493718e45d6616a3", null ]
+    [ "natsCounter_AddStr", "group__counterStrGroup.html#ga316bd780265bf430cee0c991e99e89f1", null ],
+    [ "natsCounter_LoadStr", "group__counterStrGroup.html#gaad1c48db062570b8c20fde311fb8f48d", null ]
 ];

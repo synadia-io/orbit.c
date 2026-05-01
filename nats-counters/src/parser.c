@@ -17,8 +17,8 @@
 #include <string.h>
 #include <stdio.h>
 
-// Returns true when s is a valid decimal integer string.
-// If requireSign is true, s must start with '+' or '-'.
+// Returns true when s is a valid decimal integer string,
+// with an optional leading '+' or '-'.
 static bool
 _isValidNumber(const char *s)
 {
@@ -308,6 +308,7 @@ natsCounterParser_ParsePubAckValue(const char  *ackVal,
     if (ackVal == NULL)
         return NATS_NOT_FOUND;
 
+    printf("Parsing PubAck value: '%s'\n", ackVal);
     if (!_isValidNumber(ackVal))
         return NATS_ERR;
 

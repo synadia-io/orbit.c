@@ -141,6 +141,11 @@ int main(int argc, char **argv)
             printf("  %s = %lld\n", buf, value);
 
             subjectBuf[idx] = strdup(buf);
+            if (subjectBuf[idx] == NULL)
+            {
+                s = NATS_NO_MEMORY;
+                goto done;
+            }
             subjects[idx]   = subjectBuf[idx];
             idx++;
         }
@@ -164,9 +169,12 @@ int main(int argc, char **argv)
     printf("\nFetched %d entries.\n", ctx.count);
 
 done:
-    for (i = 0; i < numSubjects; i++)
-        free(subjectBuf[i]);
-    free(subjectBuf);
+    if (subjectBuf != NULL)
+    {
+        for (i = 0; i < numSubjects; i++)
+            free(subjectBuf[i]);
+        free(subjectBuf);
+    }
     free(subjects);
 
     natsCounter_Destroy(counter);
