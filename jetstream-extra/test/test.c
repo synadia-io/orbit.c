@@ -34,9 +34,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 
-//-----------------------------------------------------------------------------
 // Test framework — same as nats-counters.
-//-----------------------------------------------------------------------------
 
 typedef void (*testFunc)(void);
 
@@ -81,9 +79,7 @@ static bool          keepServerOutput = false;
 #define testCond(c)     if(c) { printf("\033[0;32mPASSED\033[0;0m\n"); fflush(stdout); } \
                         else  { printf("\033[0;31mFAILED\033[0;0m\n"); fflush(stdout); failed=true; return; }
 
-//-----------------------------------------------------------------------------
 // Server lifecycle
-//-----------------------------------------------------------------------------
 
 typedef pid_t natsPid;
 
@@ -166,9 +162,7 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
     return pid;
 }
 
-//-----------------------------------------------------------------------------
 // Filesystem helpers
-//-----------------------------------------------------------------------------
 
 static void
 _rmtree(const char *path)
@@ -203,9 +197,7 @@ _makeUniqueDir(char *buf, int bufLen, const char *prefix)
     snprintf(buf, bufLen, "%s%d_%d", prefix, (int)getpid(), ++_uniqueCounter);
 }
 
-//-----------------------------------------------------------------------------
 // JetStream setup macros
-//-----------------------------------------------------------------------------
 
 #define JS_SETUP                                                            \
 natsStatus      s    = NATS_OK;                                             \
@@ -298,11 +290,11 @@ test_ValidateNullStream(void)
     jsBatchFetchOptions_Init(&opts);
 
     test("NULL stream rejected: ");
-    s = jsBatchFetch(&list, nc, NULL, NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, NULL, NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 
     test("Empty stream rejected: ");
-    s = jsBatchFetch(&list, nc, "", NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "", NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -318,7 +310,7 @@ test_ValidateBatchTooLarge(void)
     opts.Batch = JS_BATCH_FETCH_MAX_BATCH + 1;
 
     test("Batch > 1000 rejected: ");
-    s = jsBatchFetch(&list, nc, "S", NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "S", NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -335,7 +327,7 @@ test_ValidateSequenceAndStartTimeMutex(void)
     opts.StartTime = 1000;
 
     test("Sequence + StartTime rejected: ");
-    s = jsBatchFetch(&list, nc, "S", NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "S", NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -352,7 +344,7 @@ test_ValidateUpToSeqAndUpToTimeMutex(void)
     opts.UpToTime = 1000;
 
     test("UpToSeq + UpToTime rejected: ");
-    s = jsBatchFetch(&list, nc, "S", NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "S", NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -370,7 +362,7 @@ test_ValidateMultiLastForLenZero(void)
     opts.MultiLastForLen = 0;
 
     test("MultiLastFor with length 0 rejected: ");
-    s = jsBatchFetch(&list, nc, "S", NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "S", NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -393,7 +385,7 @@ test_ValidateTooManySubjects(void)
     opts.MultiLastForLen = n;
 
     test("> 1024 subjects rejected: ");
-    s = jsBatchFetch(&list, nc, "S", NULL, &opts, 1000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "S", NULL, &opts, 1000, NULL);
     testCond(s == NATS_INVALID_ARG);
 
     free(subjects);
@@ -410,7 +402,7 @@ test_ValidateTimeoutZeroSync(void)
     jsBatchFetchOptions_Init(&opts);
 
     test("Sync timeout=0 rejected: ");
-    s = jsBatchFetch(&list, nc, "S", NULL, &opts, 0, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "S", NULL, &opts, 0, NULL);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -445,7 +437,7 @@ test_BatchFetchHappyPath(void)
     test("Fetch full batch: ");
     jsBatchFetchOptions_Init(&opts);
     opts.Batch = nMsgs;
-    s = jsBatchFetch(&list, nc, "BATCH", NULL, &opts, 5000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "BATCH", NULL, &opts, 5000, NULL);
     testCond((s == NATS_OK) && (list.Count == nMsgs));
 
     natsMsgList_Destroy(&list);
@@ -478,7 +470,7 @@ test_BatchFetchByteCap(void)
     jsBatchFetchOptions_Init(&opts);
     opts.Batch    = 20;
     opts.MaxBytes = 50;
-    s = jsBatchFetch(&list, nc, "BCAP", NULL, &opts, 5000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "BCAP", NULL, &opts, 5000, NULL);
     // Server should stop short of returning all 20.
     testCond((s == NATS_OK) && (list.Count > 0) && (list.Count < 20));
 
@@ -513,7 +505,7 @@ test_BatchFetchMultiLastFor(void)
     jsBatchFetchOptions_Init(&opts);
     opts.MultiLastFor    = subjects;
     opts.MultiLastForLen = 3;
-    s = jsBatchFetch(&list, nc, "MLAST", NULL, &opts, 5000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "MLAST", NULL, &opts, 5000, NULL);
 
     if (s == NATS_OK)
     {
@@ -602,7 +594,7 @@ test_BatchFetchAsyncHappyPath(void)
     test("Async fetch dispatches and completes: ");
     jsBatchFetchOptions_Init(&opts);
     opts.Batch = nMsgs;
-    s = jsBatchFetchAsync(nc, "ASYNC", NULL, &opts, _asyncMsg, _asyncDone, &ctx);
+    s = jsBatchFetch_AsyncFetch(nc, "ASYNC", NULL, &opts, _asyncMsg, _asyncDone, &ctx);
     if (s == NATS_OK)
     {
         // Wait up to 5s for doneCB.
@@ -655,7 +647,7 @@ test_BatchFetchUnsupportedStream(void)
     test("Fetch surfaces server rejection (timeout or status): ");
     jsBatchFetchOptions_Init(&opts);
     opts.Batch = 10;
-    s = jsBatchFetch(&list, nc, "NODIRECT", NULL, &opts, 1500, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, "NODIRECT", NULL, &opts, 1500, NULL);
     // The DIRECT.GET subject won't be served. Expect either timeout or a
     // non-OK status — but never NATS_OK with messages.
     testCond((s != NATS_OK) || (list.Count == 0));

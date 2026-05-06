@@ -97,22 +97,86 @@ $(function(){initNavTree('group__jsBatchFetchFuncGroup.html','',''); });
 Functions</h2></td></tr>
 <tr class="memitem:ga848864ba06ae521db9e64e5322f7d991" id="r_ga848864ba06ae521db9e64e5322f7d991"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga848864ba06ae521db9e64e5322f7d991">jsBatchFetchOptions_Init</a> (<a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *opts)</td></tr>
 <tr class="memdesc:ga848864ba06ae521db9e64e5322f7d991"><td class="mdescLeft">&#160;</td><td class="mdescRight">Initialises a <a class="el" href="structjsBatchFetchOptions.html" title="Options for a JetStream DIRECT.GET batch request.">jsBatchFetchOptions</a> to its defaults.  <br /></td></tr>
-<tr class="memitem:gab46311dab57b30fc074e320e7444d06c" id="r_gab46311dab57b30fc074e320e7444d06c"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gab46311dab57b30fc074e320e7444d06c">jsBatchFetch</a> (natsMsgList *list, natsConnection *nc, const char *stream, jsOptions *opts, <a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *bopts, int64_t timeout, jsErrCode *errCode)</td></tr>
-<tr class="memdesc:gab46311dab57b30fc074e320e7444d06c"><td class="mdescLeft">&#160;</td><td class="mdescRight">Synchronously fetches a batch of messages from a JetStream stream.  <br /></td></tr>
-<tr class="memitem:gab8baf39cba514bdc3504b2d5e456b379" id="r_gab8baf39cba514bdc3504b2d5e456b379"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#gab8baf39cba514bdc3504b2d5e456b379">jsBatchFetchAsync</a> (natsConnection *nc, const char *stream, jsOptions *opts, <a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *bopts, natsMsgHandler msgCB, <a class="el" href="group__jsBatchFetchCallbacksGroup.html#ga4f87af00e6469ae87df9ce4994329292">jsBatchFetchCompleteHandler</a> doneCB, void *closure)</td></tr>
-<tr class="memdesc:gab8baf39cba514bdc3504b2d5e456b379"><td class="mdescLeft">&#160;</td><td class="mdescRight">Asynchronously fetches a batch of messages from a JetStream stream.  <br /></td></tr>
+<tr class="memitem:ga350fa44cf8dbe965ce0e9af5328ce04e" id="r_ga350fa44cf8dbe965ce0e9af5328ce04e"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga350fa44cf8dbe965ce0e9af5328ce04e">jsBatchFetch_Fetch</a> (natsMsgList *list, natsConnection *nc, const char *stream, jsOptions *opts, <a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *bopts, int64_t timeout, jsErrCode *errCode)</td></tr>
+<tr class="memdesc:ga350fa44cf8dbe965ce0e9af5328ce04e"><td class="mdescLeft">&#160;</td><td class="mdescRight">Synchronously fetches a batch of messages from a JetStream stream.  <br /></td></tr>
+<tr class="memitem:ga0f51d0579a3225457e6bb8d7e586d223" id="r_ga0f51d0579a3225457e6bb8d7e586d223"><td class="memItemLeft">NATS_EXTERN natsStatus&#160;</td><td class="memItemRight"><a class="el" href="#ga0f51d0579a3225457e6bb8d7e586d223">jsBatchFetch_AsyncFetch</a> (natsConnection *nc, const char *stream, jsOptions *opts, <a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *bopts, natsMsgHandler msgCB, <a class="el" href="group__jsBatchFetchCallbacksGroup.html#ga4f87af00e6469ae87df9ce4994329292">jsBatchFetchCompleteHandler</a> doneCB, void *closure)</td></tr>
+<tr class="memdesc:ga0f51d0579a3225457e6bb8d7e586d223"><td class="mdescLeft">&#160;</td><td class="mdescRight">Asynchronously fetches a batch of messages from a JetStream stream.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Batch fetch functions. </p>
 </div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Function Documentation</h2>
-<a id="gab46311dab57b30fc074e320e7444d06c" name="gab46311dab57b30fc074e320e7444d06c"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#gab46311dab57b30fc074e320e7444d06c">&#9670;&#160;</a></span>jsBatchFetch()</h2>
+<a id="ga0f51d0579a3225457e6bb8d7e586d223" name="ga0f51d0579a3225457e6bb8d7e586d223"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga0f51d0579a3225457e6bb8d7e586d223">&#9670;&#160;</a></span>jsBatchFetch_AsyncFetch()</h2>
 
 <div class="memitem">
 <div class="memproto">
       <table class="memname">
         <tr>
-          <td class="memname">NATS_EXTERN natsStatus jsBatchFetch </td>
+          <td class="memname">NATS_EXTERN natsStatus jsBatchFetch_AsyncFetch </td>
+          <td>(</td>
+          <td class="paramtype">natsConnection *</td>          <td class="paramname"><span class="paramname"><em>nc</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">const char *</td>          <td class="paramname"><span class="paramname"><em>stream</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">jsOptions *</td>          <td class="paramname"><span class="paramname"><em>opts</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *</td>          <td class="paramname"><span class="paramname"><em>bopts</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">natsMsgHandler</td>          <td class="paramname"><span class="paramname"><em>msgCB</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="group__jsBatchFetchCallbacksGroup.html#ga4f87af00e6469ae87df9ce4994329292">jsBatchFetchCompleteHandler</a></td>          <td class="paramname"><span class="paramname"><em>doneCB</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">void *</td>          <td class="paramname"><span class="paramname"><em>closure</em></span>&#160;)</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Asynchronously fetches a batch of messages from a JetStream stream. </p>
+<p>Sets up an inbox subscription, fires the request, and returns immediately. Each matching message is delivered to <span class="tt">msgCB</span> from a library worker thread. When the batch terminates (server EOB or error), <span class="tt">doneCB</span> is invoked exactly once and the subscription is torn down.</p>
+<p><span class="tt">msgCB</span> takes ownership of each delivered message and must call #natsMsg_Destroy on it. End-of-batch sentinel messages emitted by the server are intercepted by the library and never delivered to <span class="tt">msgCB</span>.</p>
+<p>The async form has no client-side deadline; termination is driven by the server's EOB sentinel. Use the synchronous <a class="el" href="#ga350fa44cf8dbe965ce0e9af5328ce04e" title="Synchronously fetches a batch of messages from a JetStream stream.">jsBatchFetch_Fetch</a> when a timeout is required.</p>
+<dl class="params"><dt>Parameters</dt><dd>
+  <table class="params">
+    <tr><td class="paramname">nc</td><td>the NATS connection. Must outlive the fetch. </td></tr>
+    <tr><td class="paramname">stream</td><td>the name of the stream to read from. </td></tr>
+    <tr><td class="paramname">opts</td><td>optional #jsOptions for API prefix overrides; may be <span class="tt">NULL</span>. </td></tr>
+    <tr><td class="paramname">bopts</td><td>the batch-fetch options (see <a class="el" href="structjsBatchFetchOptions.html" title="Options for a JetStream DIRECT.GET batch request.">jsBatchFetchOptions</a>). </td></tr>
+    <tr><td class="paramname">msgCB</td><td>callback invoked once per received message. </td></tr>
+    <tr><td class="paramname">doneCB</td><td>callback invoked exactly once when the fetch terminates. </td></tr>
+    <tr><td class="paramname">closure</td><td>user-supplied pointer forwarded to both callbacks. </td></tr>
+  </table>
+  </dd>
+</dl>
+<dl class="section return"><dt>Returns</dt><dd>#NATS_OK once the request is in flight, #NATS_INVALID_ARG for malformed options, or another #natsStatus on setup failure. When this call returns non-OK, neither callback will be invoked. </dd></dl>
+
+</div>
+</div>
+<a id="ga350fa44cf8dbe965ce0e9af5328ce04e" name="ga350fa44cf8dbe965ce0e9af5328ce04e"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga350fa44cf8dbe965ce0e9af5328ce04e">&#9670;&#160;</a></span>jsBatchFetch_Fetch()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">NATS_EXTERN natsStatus jsBatchFetch_Fetch </td>
           <td>(</td>
           <td class="paramtype">natsMsgList *</td>          <td class="paramname"><span class="paramname"><em>list</em></span>, </td>
         </tr>
@@ -169,70 +233,6 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="gab8baf39cba514bdc3504b2d5e456b379" name="gab8baf39cba514bdc3504b2d5e456b379"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#gab8baf39cba514bdc3504b2d5e456b379">&#9670;&#160;</a></span>jsBatchFetchAsync()</h2>
-
-<div class="memitem">
-<div class="memproto">
-      <table class="memname">
-        <tr>
-          <td class="memname">NATS_EXTERN natsStatus jsBatchFetchAsync </td>
-          <td>(</td>
-          <td class="paramtype">natsConnection *</td>          <td class="paramname"><span class="paramname"><em>nc</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
-          <td></td>
-          <td class="paramtype">const char *</td>          <td class="paramname"><span class="paramname"><em>stream</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
-          <td></td>
-          <td class="paramtype">jsOptions *</td>          <td class="paramname"><span class="paramname"><em>opts</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
-          <td></td>
-          <td class="paramtype"><a class="el" href="structjsBatchFetchOptions.html">jsBatchFetchOptions</a> *</td>          <td class="paramname"><span class="paramname"><em>bopts</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
-          <td></td>
-          <td class="paramtype">natsMsgHandler</td>          <td class="paramname"><span class="paramname"><em>msgCB</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
-          <td></td>
-          <td class="paramtype"><a class="el" href="group__jsBatchFetchCallbacksGroup.html#ga4f87af00e6469ae87df9ce4994329292">jsBatchFetchCompleteHandler</a></td>          <td class="paramname"><span class="paramname"><em>doneCB</em></span>, </td>
-        </tr>
-        <tr>
-          <td class="paramkey"></td>
-          <td></td>
-          <td class="paramtype">void *</td>          <td class="paramname"><span class="paramname"><em>closure</em></span>&#160;)</td>
-        </tr>
-      </table>
-</div><div class="memdoc">
-
-<p>Asynchronously fetches a batch of messages from a JetStream stream. </p>
-<p>Sets up an inbox subscription, fires the request, and returns immediately. Each matching message is delivered to <span class="tt">msgCB</span> from a library worker thread. When the batch terminates (server EOB or error), <span class="tt">doneCB</span> is invoked exactly once and the subscription is torn down.</p>
-<p><span class="tt">msgCB</span> takes ownership of each delivered message and must call #natsMsg_Destroy on it. End-of-batch sentinel messages emitted by the server are intercepted by the library and never delivered to <span class="tt">msgCB</span>.</p>
-<p>The async form has no client-side deadline; termination is driven by the server's EOB sentinel. Use the synchronous <a class="el" href="#gab46311dab57b30fc074e320e7444d06c" title="Synchronously fetches a batch of messages from a JetStream stream.">jsBatchFetch</a> when a timeout is required.</p>
-<dl class="params"><dt>Parameters</dt><dd>
-  <table class="params">
-    <tr><td class="paramname">nc</td><td>the NATS connection. Must outlive the fetch. </td></tr>
-    <tr><td class="paramname">stream</td><td>the name of the stream to read from. </td></tr>
-    <tr><td class="paramname">opts</td><td>optional #jsOptions for API prefix overrides; may be <span class="tt">NULL</span>. </td></tr>
-    <tr><td class="paramname">bopts</td><td>the batch-fetch options (see <a class="el" href="structjsBatchFetchOptions.html" title="Options for a JetStream DIRECT.GET batch request.">jsBatchFetchOptions</a>). </td></tr>
-    <tr><td class="paramname">msgCB</td><td>callback invoked once per received message. </td></tr>
-    <tr><td class="paramname">doneCB</td><td>callback invoked exactly once when the fetch terminates. </td></tr>
-    <tr><td class="paramname">closure</td><td>user-supplied pointer forwarded to both callbacks. </td></tr>
-  </table>
-  </dd>
-</dl>
-<dl class="section return"><dt>Returns</dt><dd>#NATS_OK once the request is in flight, #NATS_INVALID_ARG for malformed options, or another #natsStatus on setup failure. When this call returns non-OK, neither callback will be invoked. </dd></dl>
-
-</div>
-</div>
 <a id="ga848864ba06ae521db9e64e5322f7d991" name="ga848864ba06ae521db9e64e5322f7d991"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#ga848864ba06ae521db9e64e5322f7d991">&#9670;&#160;</a></span>jsBatchFetchOptions_Init()</h2>
 
@@ -249,7 +249,7 @@ Functions</h2></td></tr>
 </div><div class="memdoc">
 
 <p>Initialises a <a class="el" href="structjsBatchFetchOptions.html" title="Options for a JetStream DIRECT.GET batch request.">jsBatchFetchOptions</a> to its defaults. </p>
-<p>Zeros every field. Use before setting any specific options and passing the struct to <a class="el" href="#gab46311dab57b30fc074e320e7444d06c" title="Synchronously fetches a batch of messages from a JetStream stream.">jsBatchFetch</a> or <a class="el" href="#gab8baf39cba514bdc3504b2d5e456b379" title="Asynchronously fetches a batch of messages from a JetStream stream.">jsBatchFetchAsync</a>.</p>
+<p>Zeros every field. Use before setting any specific options and passing the struct to <a class="el" href="#ga350fa44cf8dbe965ce0e9af5328ce04e" title="Synchronously fetches a batch of messages from a JetStream stream.">jsBatchFetch_Fetch</a> or <a class="el" href="#ga0f51d0579a3225457e6bb8d7e586d223" title="Asynchronously fetches a batch of messages from a JetStream stream.">jsBatchFetch_AsyncFetch</a>.</p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
     <tr><td class="paramname">opts</td><td>the options struct to initialise; cannot be <span class="tt">NULL</span>. </td></tr>

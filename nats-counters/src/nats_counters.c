@@ -110,9 +110,7 @@ natsCounter_Destroy(natsCounter *counter)
     free(counter);
 }
 
-//-----------------------------------------------------------------------------
 // Integer convenience operations
-//-----------------------------------------------------------------------------
 
 natsStatus
 natsCounter_Add(natsCounter *counter,
@@ -178,9 +176,7 @@ natsCounter_Load(natsCounter *counter,
     return s;
 }
 
-//-----------------------------------------------------------------------------
 // Arbitrary-precision (string) operations
-//-----------------------------------------------------------------------------
 
 natsStatus
 natsCounter_AddStr(natsCounter  *counter,
@@ -236,9 +232,7 @@ natsCounter_LoadStr(natsCounter  *counter,
     return (*value != NULL) ? NATS_OK : NATS_NO_MEMORY;
 }
 
-//-----------------------------------------------------------------------------
 // Entry operations
-//-----------------------------------------------------------------------------
 
 natsStatus
 natsCounter_Get(natsCounter      *counter,

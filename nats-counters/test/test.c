@@ -36,9 +36,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 
-//-----------------------------------------------------------------------------
 // Test framework — mirrors nats.c/test conventions.
-//-----------------------------------------------------------------------------
 
 typedef void (*testFunc)(void);
 
@@ -83,12 +81,10 @@ static bool          keepServerOutput    = false;
 #define testCond(c)     if(c) { printf("\033[0;32mPASSED\033[0;0m\n"); fflush(stdout); } \
                         else  { printf("\033[0;31mFAILED\033[0;0m\n"); fflush(stdout); failed=true; return; }
 
-//-----------------------------------------------------------------------------
 // Server lifecycle — simplified from nats.c/test/test.h.
 //
 // We cannot use nats.c internal APIs (natsMutex, natsHash, etc.) so we track
 // at most one server PID at a time via a simple global.
-//-----------------------------------------------------------------------------
 
 typedef pid_t natsPid;
 
@@ -189,9 +185,7 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
     return pid;
 }
 
-//-----------------------------------------------------------------------------
 // Filesystem helpers
-//-----------------------------------------------------------------------------
 
 static void
 _rmtree(const char *path)
@@ -237,14 +231,12 @@ _makeUniqueDir(char *buf, int bufLen, const char *prefix)
     snprintf(buf, bufLen, "%s%d_%d", prefix, (int)getpid(), ++_uniqueCounter);
 }
 
-//-----------------------------------------------------------------------------
 // JetStream setup / teardown macros
 //
 // JS_SETUP declares local variables, starts a nats-server with -js, connects,
 // and creates a JetStream context.
 //
 // JS_TEARDOWN cleans up all resources.
-//-----------------------------------------------------------------------------
 
 #define JS_SETUP                                                            \
 natsStatus      s    = NATS_OK;                                             \
@@ -275,9 +267,7 @@ natsConnection_Destroy(nc);             \
 _stopServer(pid);                       \
 _rmtree(datastore);
 
-//-----------------------------------------------------------------------------
 // Stream helper — creates a counter-ready stream for the given subject.
-//-----------------------------------------------------------------------------
 
 static natsStatus
 _createStream(jsCtx *js, const char *name, const char *subj)

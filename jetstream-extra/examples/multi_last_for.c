@@ -74,7 +74,7 @@ int main(int argc, char **argv)
     opts.MultiLastFor    = deviceSubjects;
     opts.MultiLastForLen = 3;
 
-    s = jsBatchFetch(&list, nc, STREAM_NAME, NULL, &opts, 5000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, STREAM_NAME, NULL, &opts, 5000, NULL);
     if (s != NATS_OK) goto done;
 
     printf("Received %d messages:\n", list.Count);

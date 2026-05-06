@@ -48,8 +48,8 @@ extern "C" {
 
 /** \brief Options for a JetStream DIRECT.GET batch request.
  *
- * Mirrors the field set described in ADR-31. Pass to #jsBatchFetch or
- * #jsBatchFetchAsync along with a `jsCtx`.
+ * Mirrors the field set described in ADR-31. Pass to #jsBatchFetch_Fetch or
+ * #jsBatchFetch_AsyncFetch along with a `jsCtx`.
  *
  * Mutual exclusivity (validated client-side):
  *   - `Sequence` and `StartTime` may not both be set.
@@ -93,7 +93,7 @@ typedef struct jsBatchFetchOptions
  * #natsStatus on transport / protocol error.
  * @param jsErr JetStream error code surfaced by the server, or 0 if not
  * applicable.
- * @param closure the user-supplied pointer passed to #jsBatchFetchAsync.
+ * @param closure the user-supplied pointer passed to #jsBatchFetch_AsyncFetch.
  */
 typedef void (*jsBatchFetchCompleteHandler)(natsStatus  status,
                                             jsErrCode   jsErr,
@@ -110,7 +110,7 @@ typedef void (*jsBatchFetchCompleteHandler)(natsStatus  status,
 /** \brief Initialises a #jsBatchFetchOptions to its defaults.
  *
  * Zeros every field. Use before setting any specific options and passing
- * the struct to #jsBatchFetch or #jsBatchFetchAsync.
+ * the struct to #jsBatchFetch_Fetch or #jsBatchFetch_AsyncFetch.
  *
  * @param opts the options struct to initialise; cannot be `NULL`.
  * @return #NATS_OK on success, #NATS_INVALID_ARG if `opts` is `NULL`.
@@ -149,13 +149,13 @@ jsBatchFetchOptions_Init(jsBatchFetchOptions *opts);
  * batched DIRECT.GET, or another #natsStatus for transport errors.
  */
 NATS_EXTERN natsStatus
-jsBatchFetch(natsMsgList         *list,
-             natsConnection      *nc,
-             const char          *stream,
-             jsOptions           *opts,
-             jsBatchFetchOptions *bopts,
-             int64_t              timeout,
-             jsErrCode           *errCode);
+jsBatchFetch_Fetch(natsMsgList         *list,
+                   natsConnection      *nc,
+                   const char          *stream,
+                   jsOptions           *opts,
+                   jsBatchFetchOptions *bopts,
+                   int64_t              timeout,
+                   jsErrCode           *errCode);
 
 /** \brief Asynchronously fetches a batch of messages from a JetStream stream.
  *
@@ -169,7 +169,7 @@ jsBatchFetch(natsMsgList         *list,
  * server are intercepted by the library and never delivered to `msgCB`.
  *
  * The async form has no client-side deadline; termination is driven by
- * the server's EOB sentinel. Use the synchronous #jsBatchFetch when a
+ * the server's EOB sentinel. Use the synchronous #jsBatchFetch_Fetch when a
  * timeout is required.
  *
  * @param nc the NATS connection. Must outlive the fetch.
@@ -185,13 +185,13 @@ jsBatchFetch(natsMsgList         *list,
  * will be invoked.
  */
 NATS_EXTERN natsStatus
-jsBatchFetchAsync(natsConnection              *nc,
-                  const char                  *stream,
-                  jsOptions                   *opts,
-                  jsBatchFetchOptions         *bopts,
-                  natsMsgHandler               msgCB,
-                  jsBatchFetchCompleteHandler  doneCB,
-                  void                        *closure);
+jsBatchFetch_AsyncFetch(natsConnection              *nc,
+                        const char                  *stream,
+                        jsOptions                   *opts,
+                        jsBatchFetchOptions         *bopts,
+                        natsMsgHandler               msgCB,
+                        jsBatchFetchCompleteHandler  doneCB,
+                        void                        *closure);
 
 /** @} */ // end jsBatchFetchFuncGroup
 /** @} */ // end jsBatchFetchGroup
