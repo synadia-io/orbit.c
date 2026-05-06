@@ -30,6 +30,7 @@ html/
 out/
 .cache/
 .claude
+compile_commands.json
 
 # Mac
 .DS_Store
