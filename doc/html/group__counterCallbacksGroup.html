@@ -95,39 +95,12 @@ $(function(){initNavTree('group__counterCallbacksGroup.html','',''); });
 <table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-typedef-members" class="groupheader"><a id="typedef-members" name="typedef-members"></a>
 Typedefs</h2></td></tr>
-<tr class="memitem:gaef89d27887dbdaff998b0ea2969fc76c" id="r_gaef89d27887dbdaff998b0ea2969fc76c"><td class="memItemLeft">typedef void(*&#160;</td><td class="memItemRight"><a class="el" href="#gaef89d27887dbdaff998b0ea2969fc76c">natsCounterIterFn</a>) (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, <a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry, natsStatus status, void *closure)</td></tr>
-<tr class="memdesc:gaef89d27887dbdaff998b0ea2969fc76c"><td class="mdescLeft">&#160;</td><td class="mdescRight">Callback invoked once per result by <a class="el" href="group__counterEntryGroup.html#ga58467f8c9632a1aa86f7148b475e2dae" title="Fetches counter entries for multiple subjects in a single batch.">natsCounter_GetMultiple()</a>.  <br /></td></tr>
 <tr class="memitem:ga192c23a95f3c45188551f1ed23f1234e" id="r_ga192c23a95f3c45188551f1ed23f1234e"><td class="memItemLeft">typedef void(*&#160;</td><td class="memItemRight"><a class="el" href="#ga192c23a95f3c45188551f1ed23f1234e">natsCounterSourceIterFn</a>) (const char *stream, const char *subject, const char *value, void *closure)</td></tr>
 <tr class="memdesc:ga192c23a95f3c45188551f1ed23f1234e"><td class="mdescLeft">&#160;</td><td class="mdescRight">Callback invoked once per source contribution by <a class="el" href="group__counterEntryGroup.html#gad3af5876c780662a5f74809f59c5e783" title="Iterates over each per-source contribution in the entry.">natsCounterEntry_IterSources()</a>.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Counter callbacks. </p>
 </div><a name="doc-typedef-members" id="doc-typedef-members"></a><h2 id="header-doc-typedef-members" class="groupheader">Typedef Documentation</h2>
-<a id="gaef89d27887dbdaff998b0ea2969fc76c" name="gaef89d27887dbdaff998b0ea2969fc76c"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#gaef89d27887dbdaff998b0ea2969fc76c">&#9670;&#160;</a></span>natsCounterIterFn</h2>
-
-<div class="memitem">
-<div class="memproto">
-      <table class="memname">
-        <tr>
-          <td class="memname">typedef void(* natsCounterIterFn) (<a class="el" href="group__counterTypesGroup.html#ga26066c5a277b0a0e8efcb968e1a8e540">natsCounter</a> *counter, <a class="el" href="group__counterTypesGroup.html#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a> *entry, natsStatus status, void *closure)</td>
-        </tr>
-      </table>
-</div><div class="memdoc">
-
-<p>Callback invoked once per result by <a class="el" href="group__counterEntryGroup.html#ga58467f8c9632a1aa86f7148b475e2dae" title="Fetches counter entries for multiple subjects in a single batch.">natsCounter_GetMultiple()</a>. </p>
-<dl class="params"><dt>Parameters</dt><dd>
-  <table class="params">
-    <tr><td class="paramname">counter</td><td>the counter that issued the batch request (not owned). </td></tr>
-    <tr><td class="paramname">entry</td><td>the current result entry (caller must NOT destroy; valid only for the duration of this callback). </td></tr>
-    <tr><td class="paramname">status</td><td>#NATS_OK on success; any other value signals an error and <span class="tt">entry</span> will be <span class="tt">NULL</span>. </td></tr>
-    <tr><td class="paramname">closure</td><td>the user-supplied pointer passed to <a class="el" href="group__counterEntryGroup.html#ga58467f8c9632a1aa86f7148b475e2dae" title="Fetches counter entries for multiple subjects in a single batch.">natsCounter_GetMultiple()</a>. </td></tr>
-  </table>
-  </dd>
-</dl>
-
-</div>
-</div>
 <a id="ga192c23a95f3c45188551f1ed23f1234e" name="ga192c23a95f3c45188551f1ed23f1234e"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#ga192c23a95f3c45188551f1ed23f1234e">&#9670;&#160;</a></span>natsCounterSourceIterFn</h2>
 

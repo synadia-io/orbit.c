@@ -97,6 +97,8 @@ $(function(){initNavTree('group__counterTypesGroup.html','',''); });
 Data Structures</h2></td></tr>
 <tr class="memitem:_5F_5FnatsCounterEntry" id="r__5F_5FnatsCounterEntry"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="struct____natsCounterEntry.html">__natsCounterEntry</a></td></tr>
 <tr class="memdesc:"><td class="mdescLeft">&#160;</td><td class="mdescRight">Holds a snapshot of a counter at a point in time.  <a href="struct____natsCounterEntry.html#details">More...</a><br /></td></tr>
+<tr class="memitem:_5F_5FnatsCounterEntryList" id="r__5F_5FnatsCounterEntryList"><td class="memItemLeft">struct &#160;</td><td class="memItemRight"><a class="el" href="struct____natsCounterEntryList.html">__natsCounterEntryList</a></td></tr>
+<tr class="memdesc:"><td class="mdescLeft">&#160;</td><td class="mdescRight">A list of counter entries, used for batch retrieval.  <a href="struct____natsCounterEntryList.html#details">More...</a><br /></td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-typedef-members" class="groupheader"><a id="typedef-members" name="typedef-members"></a>
 Typedefs</h2></td></tr>
@@ -104,6 +106,8 @@ Typedefs</h2></td></tr>
 <tr class="memdesc:ga26066c5a277b0a0e8efcb968e1a8e540"><td class="mdescLeft">&#160;</td><td class="mdescRight">Wraps a JetStream stream configured with allow_msg_counter.  <br /></td></tr>
 <tr class="memitem:ga08d67185cbc3799097149e0012dcf34f" id="r_ga08d67185cbc3799097149e0012dcf34f"><td class="memItemLeft">typedef struct <a class="el" href="struct____natsCounterEntry.html">__natsCounterEntry</a>&#160;</td><td class="memItemRight"><a class="el" href="#ga08d67185cbc3799097149e0012dcf34f">natsCounterEntry</a></td></tr>
 <tr class="memdesc:ga08d67185cbc3799097149e0012dcf34f"><td class="mdescLeft">&#160;</td><td class="mdescRight">Holds a snapshot of a counter at a point in time.  <br /></td></tr>
+<tr class="memitem:ga655c2e8b5f1dfc0cfbaa9a6084ecabe7" id="r_ga655c2e8b5f1dfc0cfbaa9a6084ecabe7"><td class="memItemLeft">typedef struct <a class="el" href="struct____natsCounterEntryList.html">__natsCounterEntryList</a>&#160;</td><td class="memItemRight"><a class="el" href="#ga655c2e8b5f1dfc0cfbaa9a6084ecabe7">natsCounterEntryList</a></td></tr>
+<tr class="memdesc:ga655c2e8b5f1dfc0cfbaa9a6084ecabe7"><td class="mdescLeft">&#160;</td><td class="mdescRight">A list of counter entries, used for batch retrieval.  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock"><p>Counter types. </p>
@@ -121,7 +125,7 @@ Typedefs</h2></td></tr>
 </div><div class="memdoc">
 
 <p>Wraps a JetStream stream configured with allow_msg_counter. </p>
-<p>Create with <a class="el" href="group__counterLifecycleGroup.html#ga7ba47e3d4ec043e8999c3a207376f572" title="Creates a counter client for the named stream.">natsCounter_GetFromStream()</a>. Destroy with <a class="el" href="group__counterLifecycleGroup.html#gaa6370154efdc6350b312c6d8b9b32795" title="Releases all resources owned by counter.">natsCounter_Destroy()</a>. </p>
+<p>Create with <a class="el" href="group__counterLifecycleGroup.html#ga2f3f28b0058bc3e0ffd4aca13cfe55bc" title="Creates a counter client for the named stream.">natsCounter_GetFromStream()</a>. Destroy with <a class="el" href="group__counterLifecycleGroup.html#gaa6370154efdc6350b312c6d8b9b32795" title="Releases all resources owned by counter.">natsCounter_Destroy()</a>. </p>
 
 </div>
 </div>
@@ -139,6 +143,23 @@ Typedefs</h2></td></tr>
 
 <p>Holds a snapshot of a counter at a point in time. </p>
 <p>Includes its value, last increment, and source-tracking state. Obtain from <a class="el" href="group__counterEntryGroup.html#gaf868a1351a78851c194b87ff8e2f4bb8" title="Fetches the full counter entry for subject.">natsCounter_Get()</a>; destroy with <a class="el" href="group__counterEntryGroup.html#ga324e02d5f51656359bdabf39431cfb71" title="Releases all resources owned by entry.">natsCounterEntry_Destroy()</a>. </p>
+
+</div>
+</div>
+<a id="ga655c2e8b5f1dfc0cfbaa9a6084ecabe7" name="ga655c2e8b5f1dfc0cfbaa9a6084ecabe7"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ga655c2e8b5f1dfc0cfbaa9a6084ecabe7">&#9670;&#160;</a></span>natsCounterEntryList</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">typedef struct <a class="el" href="struct____natsCounterEntryList.html">__natsCounterEntryList</a> <a class="el" href="#ga655c2e8b5f1dfc0cfbaa9a6084ecabe7">natsCounterEntryList</a></td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>A list of counter entries, used for batch retrieval. </p>
+<p>Used by some APIs which return a list of <a class="el" href="#ga08d67185cbc3799097149e0012dcf34f" title="Holds a snapshot of a counter at a point in time.">natsCounterEntry</a> objects. </p>
 
 </div>
 </div>

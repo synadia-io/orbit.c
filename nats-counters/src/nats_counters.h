@@ -90,19 +90,6 @@ typedef struct __natsCounterEntryList {
  *  @{
  */
 
-/** \brief Callback invoked once per result by #natsCounter_GetMultiple().
- *
- * @param counter the counter that issued the batch request (not owned).
- * @param entry the current result entry (caller must NOT destroy; valid only
- * for the duration of this callback).
- * @param status #NATS_OK on success; any other value signals an
- * error and `entry` will be `NULL`.
- * @param closure the user-supplied pointer passed to
- * #natsCounter_GetMultiple().
- */
-typedef void (*natsCounterIterFn)(natsCounter *counter, natsCounterEntry *entry,
-                                  natsStatus status, void *closure);
-
 /** \brief Callback invoked once per source contribution by
  * #natsCounterEntry_IterSources().
  *
@@ -303,24 +290,29 @@ NATS_EXTERN natsStatus natsCounter_Get(natsCounter *counter,
 /** \brief Fetches counter entries for multiple subjects in a single batch.
  *
  * Issues one batched DIRECT.GET request (ADR-31 multi-last) for the given
- * subject list and invokes `handler` once per matching entry, then once
- * more with a null entry to signal completion. Non-existent subjects are
- * silently skipped by the server. `subjects` may contain NATS wildcard
- * tokens.
+ * subject list and returns a #natsCounterEntryList containing one entry per
+ * matching subject. Non-existent subjects are silently skipped by the server,
+ * so the returned list may be shorter than `numSubjects`. `subjects` may
+ * contain NATS wildcard tokens.
  *
- * The function blocks until the server's end-of-batch sentinel arrives
- * or an internal timeout (5 seconds) elapses; entries are still
- * streamed to `handler` as they are parsed.
+ * The call blocks until the server's end-of-batch sentinel arrives or
+ * `timeout` elapses.
  *
+ * On success, `*outList` owns the returned entries; the caller must release
+ * them with #natsCounterEntryList_Destroy(). When `numSubjects` is `0` (or
+ * `subjects` is `NULL`), `*outList` is set to an empty list and #NATS_OK
+ * is returned without contacting the server. On error, `*outList` is
+ * unchanged.
+ *
+ * @param outList receives the populated entry list.
  * @param counter the counter.
  * @param subjects array of subject strings.
  * @param numSubjects number of elements in `subjects`. Must not exceed
  * the server's multi-last cap (1024).
- * @param handler callback invoked once per result, then once with a
- * null entry to signal completion. On error, `handler` is invoked with
- * a null entry and a non-OK status; no completion sentinel follows.
- * @param closure user-supplied pointer forwarded to `handler`.
- * @return #NATS_OK on success.
+ * @param timeout maximum time to wait, in milliseconds. Must be > 0
+ * unless `numSubjects` is 0.
+ * @return #NATS_OK on success, #NATS_NOT_FOUND if no subject matched,
+ * #NATS_TIMEOUT if `timeout` elapsed before the batch completed.
  */
 NATS_EXTERN natsStatus
 natsCounter_GetMultiple(natsCounterEntryList  *outList,
@@ -369,8 +361,15 @@ NATS_EXTERN natsStatus natsCounterEntry_IterSources(natsCounterEntry *entry,
  */
 NATS_EXTERN void natsCounterEntry_Destroy(natsCounterEntry *entry);
 
-NATS_EXTERN
-void natsCounterEntryList_Destroy(natsCounterEntryList *list);
+/** \brief Releases all entries owned by `list` and the backing array.
+ *
+ * Safe to call on a zero-initialised list or on a list passed to a failed
+ * #natsCounter_GetMultiple() call. Passing `NULL` is a no-op.
+ *
+ * @param list the list to destroy, or `NULL`.
+ */
+NATS_EXTERN void
+natsCounterEntryList_Destroy(natsCounterEntryList *list);
 
 /** @} */ // end counterEntryGroup
 
