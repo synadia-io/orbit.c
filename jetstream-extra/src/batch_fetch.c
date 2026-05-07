@@ -553,7 +553,7 @@ jsBatchFetch_Fetch(natsMsgList         *list,
 
     s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
                                       natsBuf_GetData(stp.body),
-                                      *natsBuf_GetLen(stp.body));
+                                      natsBuf_GetLen(stp.body));
     if (s != NATS_OK)
         goto cleanup;
 
@@ -710,7 +710,7 @@ jsBatchFetch_AsyncFetch(
 
     s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
                                       natsBuf_GetData(stp.body),
-                                      *natsBuf_GetLen(stp.body));
+                                      natsBuf_GetLen(stp.body));
     if (s != NATS_OK) {
         natsSubscription_Unsubscribe(sub);
     }

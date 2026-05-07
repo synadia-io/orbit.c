@@ -153,13 +153,13 @@ int main(int argc, char **argv)
     printf("Created global stream sourcing from all regions\n\n");
 
     // Get counters for each stream.
-    s = natsCounter_GetFromStream(&usEast, js, "REGION_US_EAST");
+    s = natsCounter_GetFromStream(&usEast, js, nc, "REGION_US_EAST");
     if (s != NATS_OK) goto done;
-    s = natsCounter_GetFromStream(&usWest, js, "REGION_US_WEST");
+    s = natsCounter_GetFromStream(&usWest, js, nc, "REGION_US_WEST");
     if (s != NATS_OK) goto done;
-    s = natsCounter_GetFromStream(&eu, js, "REGION_EU");
+    s = natsCounter_GetFromStream(&eu, js, nc, "REGION_EU");
     if (s != NATS_OK) goto done;
-    s = natsCounter_GetFromStream(&global, js, "GLOBAL");
+    s = natsCounter_GetFromStream(&global, js, nc, "GLOBAL");
     if (s != NATS_OK) goto done;
 
     // Simulate regional traffic.
