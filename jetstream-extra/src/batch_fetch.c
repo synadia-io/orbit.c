@@ -115,6 +115,27 @@ _jsonAppendInt(natsBuffer *b, int v)
 }
 
 static natsStatus
+_jsonAppendTimeRFC3339(natsBuffer *b, uint64_t nsec)
+{
+    time_t     secs   = (time_t)(nsec / 1000000000ULL);
+    uint32_t   nanos  = (uint32_t)(nsec % 1000000000ULL);
+    struct tm  tm;
+    char       tmp[48];
+    int        n;
+
+    if (gmtime_r(&secs, &tm) == NULL)
+        return NATS_ERR;
+
+    n = snprintf(tmp, sizeof(tmp),
+                 "\"%04d-%02d-%02dT%02d:%02d:%02d.%09" PRIu32 "Z\"",
+                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                 tm.tm_hour, tm.tm_min, tm.tm_sec, nanos);
+    if (n < 0 || n >= (int)sizeof(tmp))
+        return NATS_ERR;
+    return natsBuf_Append(b, tmp, n);
+}
+
+static natsStatus
 _appendLit(natsBuffer *b, const char *s)
 {
     return natsBuf_Append(b, s, (int)strlen(s));
@@ -186,7 +207,7 @@ _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
         if (s == NATS_OK)
             s = _appendLit(out, "\"start_time\":");
         if (s == NATS_OK)
-            s = _jsonAppendU64(out, bopts->StartTime);
+            s = _jsonAppendTimeRFC3339(out, bopts->StartTime);
     }
 
     if (s == NATS_OK && haveML)
@@ -224,7 +245,7 @@ _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
         if (s == NATS_OK)
             s = _appendLit(out, "\"up_to_time\":");
         if (s == NATS_OK)
-            s = _jsonAppendU64(out, bopts->UpToTime);
+            s = _jsonAppendTimeRFC3339(out, bopts->UpToTime);
     }
 
     if (s == NATS_OK)
@@ -351,18 +372,12 @@ _classify(natsMsg *msg, bool firstMessageCheck)
                 return KIND_TERM_OK;
         }
 
-        // Empty payload with no useful headers: treat as terminator (current
-        // server impl form predating the ADR-31 spec EOB marker).
         seq        = _hdr(msg, JSSequence);
         numPending = _hdr(msg, NATS_NUM_PENDING);
         upToSeq    = _hdr(msg, NATS_UPTO_SEQUENCE);
 
         if (status == NULL && seq == NULL && numPending == NULL && upToSeq == NULL)
             return KIND_TERM_OK;
-
-        // // Empty payload with hint headers: also a terminator.
-        // if (numPending != NULL || upToSeq != NULL || seq != NULL)
-        //     return KIND_TERM_OK;
     }
 
     // Non-empty payload: if this is the first message we're inspecting and it

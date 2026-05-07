@@ -308,7 +308,6 @@ natsCounterParser_ParsePubAckValue(const char  *ackVal,
     if (ackVal == NULL)
         return NATS_NOT_FOUND;
 
-    printf("Parsing PubAck value: '%s'\n", ackVal);
     if (!_isValidNumber(ackVal))
         return NATS_ERR;
 

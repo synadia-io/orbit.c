@@ -66,11 +66,11 @@ typedef struct jsBatchFetchOptions
     const char      *NextBySubject;  ///< Filter messages by this subject (may include wildcards).
     int             Batch;           ///< Maximum messages to return. Server limit: #JS_BATCH_FETCH_MAX_BATCH.
     int             MaxBytes;        ///< Soft byte cap on the response. 0 = unlimited.
-    uint64_t        StartTime;       ///< Start at-or-after this UTC nanosecond timestamp. Mutually exclusive with #Sequence.
+    uint64_t        StartTime;       ///< Start at-or-after this timestamp, in nanoseconds since the Unix epoch (UTC). Serialised as RFC 3339. Mutually exclusive with #Sequence.
     const char      **MultiLastFor;  ///< Subjects to fetch the last message for. Activates multi-last mode.
     int             MultiLastForLen; ///< Number of entries in #MultiLastFor. Server limit: #JS_BATCH_FETCH_MAX_SUBJECTS.
     uint64_t        UpToSeq;         ///< Multi-last cutoff by sequence. Mutually exclusive with #UpToTime.
-    uint64_t        UpToTime;        ///< Multi-last cutoff by UTC nanoseconds. Mutually exclusive with #UpToSeq.
+    uint64_t        UpToTime;        ///< Multi-last cutoff timestamp, in nanoseconds since the Unix epoch (UTC). Serialised as RFC 3339. Mutually exclusive with #UpToSeq.
 
 } jsBatchFetchOptions;
 

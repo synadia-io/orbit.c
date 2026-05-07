@@ -622,6 +622,66 @@ test_BatchFetchAsyncHappyPath(void)
 }
 
 void
+test_BatchFetchStartTime(void)
+{
+    jsBatchFetchOptions opts;
+    natsMsgList         list = {0};
+    struct timespec     ts;
+    uint64_t            startNs = 0;
+    int                 i;
+    bool                allAfter;
+
+    JS_SETUP;
+
+    test("Create direct-allowed stream: ");
+    s = _createDirectStream(js, "STIME", "stime.>");
+    testCond(s == NATS_OK);
+
+    test("Publish 5 messages BEFORE the cutoff: ");
+    for (i = 0; s == NATS_OK && i < 5; i++)
+    {
+        char subj[32];
+        snprintf(subj, sizeof(subj), "stime.before.%d", i);
+        s = _publish(js, subj, "old");
+    }
+    testCond(s == NATS_OK);
+
+    nats_Sleep(50);
+    clock_gettime(CLOCK_REALTIME, &ts);
+    startNs = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    nats_Sleep(50);
+
+    test("Publish 5 messages AFTER the cutoff: ");
+    for (i = 0; s == NATS_OK && i < 5; i++)
+    {
+        char subj[32];
+        snprintf(subj, sizeof(subj), "stime.after.%d", i);
+        s = _publish(js, subj, "new");
+    }
+    testCond(s == NATS_OK);
+
+    test("Fetch with StartTime returns only post-cutoff messages: ");
+    jsBatchFetchOptions_Init(&opts);
+    opts.StartTime     = startNs;
+    opts.NextBySubject = "stime.>";
+    opts.Batch         = 50;
+    s = jsBatchFetch_Fetch(&list, nc, "STIME", NULL, &opts, 5000, NULL);
+
+    allAfter = (s == NATS_OK) && (list.Count == 5);
+    for (i = 0; allAfter && i < list.Count; i++)
+    {
+        const char *origSubj = NULL;
+        natsMsgHeader_Get(list.Msgs[i], JSSubject, &origSubj);
+        if (origSubj == NULL || strncmp(origSubj, "stime.after.", 12) != 0)
+            allAfter = false;
+    }
+    testCond(allAfter);
+
+    natsMsgList_Destroy(&list);
+    JS_TEARDOWN;
+}
+
+void
 test_BatchFetchUnsupportedStream(void)
 {
     jsBatchFetchOptions opts;

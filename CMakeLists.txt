@@ -134,6 +134,6 @@ add_compile_definitions(${ORBIT_OS} _REENTRANT)
 #----------------------------
 # Add the project directories
 
-add_subdirectory(nats-counters)
 add_subdirectory(jetstream-extra)
+add_subdirectory(nats-counters)
 #----------------------------

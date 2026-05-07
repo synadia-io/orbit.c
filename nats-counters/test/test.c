@@ -536,7 +536,7 @@ test_CounterGetFromStreamDirectNotEnabled(void)
     testCond(s == NATS_OK);
 
     test("GetFromStream fails when AllowDirect is false: ");
-    s = natsCounter_GetFromStream(&c, js, "NO_DIRECT");
+    s = natsCounter_GetFromStream(&c, js, nc, "NO_DIRECT");
     testCond(s == NATS_INVALID_CONFIG);
 
     JS_TEARDOWN;
@@ -581,7 +581,7 @@ test_CounterGetFromStreamCounterNotEnabled(void)
     testCond(s == NATS_OK);
 
     test("GetFromStream fails when AllowMsgCounter is false: ");
-    s = natsCounter_GetFromStream(&c, js, "NO_COUNTER");
+    s = natsCounter_GetFromStream(&c, js, nc, "NO_COUNTER");
     testCond(s == NATS_INVALID_CONFIG);
 
     JS_TEARDOWN;
@@ -600,7 +600,7 @@ test_CounterAddIncrementsValue(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "ADD");
+    s = natsCounter_GetFromStream(&c, js, nc, "ADD");
     testCond(s == NATS_OK);
 
     test("Add 5: ");
@@ -628,7 +628,7 @@ test_CounterAddNegativeDecrementsValue(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "ADDNEG");
+    s = natsCounter_GetFromStream(&c, js, nc, "ADDNEG");
     testCond(s == NATS_OK);
 
     test("Add 10: ");
@@ -656,7 +656,7 @@ test_CounterAddIntReturnsString(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "ADDINT");
+    s = natsCounter_GetFromStream(&c, js, nc, "ADDINT");
     testCond(s == NATS_OK);
 
     test("AddInt 5 returns string \"5\": ");
@@ -691,7 +691,7 @@ test_CounterIncrementByOne(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "INCR");
+    s = natsCounter_GetFromStream(&c, js, nc, "INCR");
     testCond(s == NATS_OK);
 
     test("Increment returns 1: ");
@@ -715,7 +715,7 @@ test_CounterDecrementByOne(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "DECR");
+    s = natsCounter_GetFromStream(&c, js, nc, "DECR");
     testCond(s == NATS_OK);
 
     test("Seed with 10: ");
@@ -743,7 +743,7 @@ test_CounterLoadReturnsCurrentValue(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "LOAD");
+    s = natsCounter_GetFromStream(&c, js, nc, "LOAD");
     testCond(s == NATS_OK);
 
     test("Seed with 42: ");
@@ -773,7 +773,7 @@ test_CounterGetReturnsEntry(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "GETENTRY");
+    s = natsCounter_GetFromStream(&c, js, nc, "GETENTRY");
     testCond(s == NATS_OK);
 
     test("Seed with 7: ");
@@ -805,7 +805,7 @@ test_CounterGetMissingSubject(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "GETMISS");
+    s = natsCounter_GetFromStream(&c, js, nc, "GETMISS");
     testCond(s == NATS_OK);
 
     test("Get missing subject returns NOT_FOUND: ");
@@ -814,20 +814,6 @@ test_CounterGetMissingSubject(void)
 
     natsCounter_Destroy(c);
     JS_TEARDOWN;
-}
-
-// Closure for batch test callback.
-typedef struct { int count; } BatchTestCtx;
-
-static void
-_batchTestHandler(natsCounter *c, natsCounterEntry *entry,
-                  natsStatus s, void *closure)
-{
-    BatchTestCtx *ctx = (BatchTestCtx *)closure;
-    if (s != NATS_OK || entry == NULL)
-        return;
-    ctx->count++;
-    (void)c;
 }
 
 void
@@ -843,7 +829,7 @@ test_CounterGetMultipleBatch(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "BATCH");
+    s = natsCounter_GetFromStream(&c, js, nc, "BATCH");
     testCond(s == NATS_OK);
 
     test("Populate 3 subjects: ");
@@ -854,10 +840,15 @@ test_CounterGetMultipleBatch(void)
 
     test("GetMultiple returns 3 entries: ");
     {
-        const char   *subjects[] = {"batch.a", "batch.b", "batch.c"};
-        BatchTestCtx  ctx = {0};
-        s = natsCounter_GetMultiple(c, subjects, 3, _batchTestHandler, &ctx);
-        testCond((s == NATS_OK) && (ctx.count == 3));
+        const char           *subjects[] = {"batch.a", "batch.b", "batch.c"};
+        natsCounterEntryList  list       = {0};
+        s = natsCounter_GetMultiple(&list, c, subjects, 3, 5000);
+        testCond((s == NATS_OK) && (list.Count == 3)
+                 && (list.Entries != NULL)
+                 && (list.Entries[0] != NULL)
+                 && (list.Entries[1] != NULL)
+                 && (list.Entries[2] != NULL));
+        natsCounterEntryList_Destroy(&list);
     }
 
     natsCounter_Destroy(c);
@@ -876,14 +867,16 @@ test_CounterGetMultipleEmpty(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "BATCHEM");
+    s = natsCounter_GetFromStream(&c, js, nc, "BATCHEM");
     testCond(s == NATS_OK);
 
-    test("GetMultiple with 0 subjects signals completion only: ");
+    test("GetMultiple with 0 subjects returns empty list: ");
     {
-        BatchTestCtx ctx = {0};
-        s = natsCounter_GetMultiple(c, NULL, 0, _batchTestHandler, &ctx);
-        testCond((s == NATS_OK) && (ctx.count == 0));
+        natsCounterEntryList list = {0};
+        s = natsCounter_GetMultiple(&list, c, NULL, 0, 5000);
+        testCond((s == NATS_OK) && (list.Count == 0)
+                 && (list.Entries == NULL));
+        natsCounterEntryList_Destroy(&list);
     }
 
     natsCounter_Destroy(c);
@@ -903,7 +896,7 @@ test_CounterGetMultipleSkipsMissing(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "BATCHMISS");
+    s = natsCounter_GetFromStream(&c, js, nc, "BATCHMISS");
     testCond(s == NATS_OK);
 
     test("Populate 1 subject: ");
@@ -912,10 +905,14 @@ test_CounterGetMultipleSkipsMissing(void)
 
     test("GetMultiple skips missing: ");
     {
-        const char   *subjects[] = {"bm.exists", "bm.missing"};
-        BatchTestCtx  ctx = {0};
-        s = natsCounter_GetMultiple(c, subjects, 2, _batchTestHandler, &ctx);
-        testCond((s == NATS_OK) && (ctx.count == 1));
+        const char           *subjects[] = {"bm.exists", "bm.missing"};
+        natsCounterEntryList  list       = {0};
+        s = natsCounter_GetMultiple(&list, c, subjects, 2, 5000);
+        testCond((s == NATS_OK) && (list.Count == 1)
+                 && (list.Entries != NULL)
+                 && (list.Entries[0] != NULL)
+                 && (strcmp(list.Entries[0]->subject, "bm.exists") == 0));
+        natsCounterEntryList_Destroy(&list);
     }
 
     natsCounter_Destroy(c);
@@ -982,7 +979,7 @@ test_CounterSourceTracking(void)
 
     // Publish to regional counter.
     test("Get regional counter: ");
-    s = natsCounter_GetFromStream(&regional, js, "REGION_A");
+    s = natsCounter_GetFromStream(&regional, js, nc, "REGION_A");
     testCond(s == NATS_OK);
 
     test("Add 42 to regional counter: ");
@@ -994,7 +991,7 @@ test_CounterSourceTracking(void)
 
     // Read global entry — should have source tracking.
     test("Get global counter: ");
-    s = natsCounter_GetFromStream(&global, js, "GLOBAL");
+    s = natsCounter_GetFromStream(&global, js, nc, "GLOBAL");
     testCond(s == NATS_OK);
 
     test("Global entry has value 42: ");
@@ -1032,7 +1029,7 @@ test_CounterAddStrAndLoadStr(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "STROPS");
+    s = natsCounter_GetFromStream(&c, js, nc, "STROPS");
     testCond(s == NATS_OK);
 
     test("AddStr \"+100\" returns \"100\": ");
@@ -1070,7 +1067,7 @@ test_CounterLargeValueExceedsLongLong(void)
     testCond(s == NATS_OK);
 
     test("Get counter: ");
-    s = natsCounter_GetFromStream(&c, js, "BIGVAL");
+    s = natsCounter_GetFromStream(&c, js, nc, "BIGVAL");
     testCond(s == NATS_OK);
 
     test("AddStr with huge value succeeds: ");

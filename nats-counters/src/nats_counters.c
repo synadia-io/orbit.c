@@ -13,6 +13,7 @@
 
 #include "nats_counters.h"
 #include "parser.h"
+#include "batch_fetch.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,8 +23,9 @@
 
 struct __natsCounter
 {
-    jsCtx      *js;
-    char       *stream; // owned copy of the stream name
+    jsCtx           *js;
+    natsConnection  *nc;
+    char            *stream; // owned copy of the stream name
 
 };
 
@@ -61,15 +63,16 @@ _counter_parseLL(const char *str, long long *out)
 }
 
 natsStatus
-natsCounter_GetFromStream(natsCounter **counter,
-                           jsCtx        *js,
-                           const char   *stream)
+natsCounter_GetFromStream(natsCounter   **counter,
+                           jsCtx          *js,
+                           natsConnection *nc,
+                           const char     *stream)
 {
     natsStatus   s    = NATS_OK;
     jsStreamInfo *info = NULL;
     natsCounter  *c   = NULL;
 
-    if (counter == NULL || js == NULL || stream == NULL)
+    if (counter == NULL || js == NULL || nc == NULL || stream == NULL)
         return NATS_INVALID_ARG;
 
     s = js_GetStreamInfo(&info, js, stream, NULL, NULL);
@@ -89,6 +92,7 @@ natsCounter_GetFromStream(natsCounter **counter,
         return NATS_NO_MEMORY;
 
     c->js     = js;
+    c->nc     = nc;
     c->stream = strdup(stream);
     if (c->stream == NULL)
     {
@@ -234,16 +238,80 @@ natsCounter_LoadStr(natsCounter  *counter,
 
 // Entry operations
 
+// Convert a DIRECT.GET response message into a counter entry. The original
+// stream subject is read from the `Nats-Subject` header when present and
+// falls back to `natsMsg_GetSubject` (which cnats populates for the
+// single-message js_DirectGetMsg path).
+static natsStatus
+_msgToEntry(natsMsg *msg, natsCounterEntry **entry)
+{
+    natsStatus         s   = NATS_OK;
+    natsCounterEntry  *e   = NULL;
+    const char        *origSubj = NULL;
+    const char        *hdr = NULL;
+
+    e = (natsCounterEntry *)calloc(1, sizeof(*e));
+    if (e == NULL)
+        return NATS_NO_MEMORY;
+
+    if (natsMsgHeader_Get(msg, JSSubject, &origSubj) != NATS_OK
+        || origSubj == NULL)
+    {
+        origSubj = natsMsg_GetSubject(msg);
+    }
+    if (origSubj == NULL)
+    {
+        natsCounterEntry_Destroy(e);
+        return NATS_ERR;
+    }
+
+    e->subject = strdup(origSubj);
+    if (e->subject == NULL)
+    {
+        natsCounterEntry_Destroy(e);
+        return NATS_NO_MEMORY;
+    }
+
+    s = natsCounterParser_ParseValue(
+            (const unsigned char *)natsMsg_GetData(msg),
+            natsMsg_GetDataLength(msg),
+            &e->value);
+
+    if (s == NATS_OK
+        && natsMsgHeader_Get(msg, NATS_COUNTER_INCREMENT_HDR, &hdr) == NATS_OK
+        && hdr != NULL)
+    {
+        s = natsCounterParser_ParseIncrement(hdr, &e->increment);
+    }
+
+    if (s == NATS_OK)
+    {
+        hdr = NULL;
+        if (natsMsgHeader_Get(msg, NATS_COUNTER_SOURCES_HDR, &hdr) == NATS_OK
+            && hdr != NULL)
+        {
+            s = natsCounterParser_ParseSources(hdr, &e->sources);
+        }
+    }
+
+    if (s != NATS_OK)
+    {
+        natsCounterEntry_Destroy(e);
+        return s;
+    }
+
+    *entry = e;
+    return NATS_OK;
+}
+
 natsStatus
 natsCounter_Get(natsCounter      *counter,
                  const char       *subject,
                  natsCounterEntry **entry)
 {
-    natsStatus               s   = NATS_OK;
+    natsStatus               s;
     jsDirectGetMsgOptions    dgo;
     natsMsg                 *msg = NULL;
-    natsCounterEntry        *e   = NULL;
-    const char              *hdr = NULL;
 
     if (counter == NULL || subject == NULL || entry == NULL)
         return NATS_INVALID_ARG;
@@ -255,103 +323,78 @@ natsCounter_Get(natsCounter      *counter,
     if (s != NATS_OK)
         return s;
 
-    e = (natsCounterEntry *)calloc(1, sizeof(*e));
-    if (e == NULL)
-    {
-        natsMsg_Destroy(msg);
-        return NATS_NO_MEMORY;
-    }
-
-    if (natsMsg_GetSubject(msg) == NULL)
-    {
-        natsMsg_Destroy(msg);
-        natsCounterEntry_Destroy(e);
-        return NATS_ERR;
-    }
-
-    e->subject = strdup(natsMsg_GetSubject(msg));
-    if (e->subject == NULL)
-    {
-        natsMsg_Destroy(msg);
-        natsCounterEntry_Destroy(e);
-        return NATS_NO_MEMORY;
-    }
-
-    // Parse body value.
-    s = natsCounterParser_ParseValue(
-            (const unsigned char *)natsMsg_GetData(msg),
-            natsMsg_GetDataLength(msg),
-            &e->value);
-
-    // Parse Nats-Incr header (optional — present on live counter messages).
-    if (s == NATS_OK)
-    {
-        if (natsMsgHeader_Get(msg, NATS_COUNTER_INCREMENT_HDR, &hdr) == NATS_OK
-            && hdr != NULL)
-        {
-            s = natsCounterParser_ParseIncrement(hdr, &e->increment);
-        }
-    }
-
-    // Parse Nats-Counter-Sources header (optional — present on sourced streams).
-    if (s == NATS_OK)
-    {
-        hdr = NULL;
-        if (natsMsgHeader_Get(msg, NATS_COUNTER_SOURCES_HDR, &hdr) == NATS_OK
-            && hdr != NULL)
-        {
-            s = natsCounterParser_ParseSources(hdr, &e->sources);
-        }
-    }
-
+    s = _msgToEntry(msg, entry);
     natsMsg_Destroy(msg);
-
-    if (s == NATS_OK)
-    {
-        *entry = e;
-        return NATS_OK;
-    }
-
-    natsCounterEntry_Destroy(e);
     return s;
 }
 
 natsStatus
-natsCounter_GetMultiple(natsCounter       *counter,
-                         const char       **subjects,
-                         int                numSubjects,
-                         natsCounterIterFn  handler,
-                         void              *closure)
+natsCounter_GetMultiple(natsCounterEntryList  *outList,
+                        natsCounter           *counter,
+                        const char            **subjects,
+                        int                   numSubjects,
+                        uint64_t              timeout)
 {
-    if (counter == NULL || handler == NULL)
+    natsStatus           s;
+    jsBatchFetchOptions  bopts;
+    natsMsgList          list = {0};
+    natsCounterEntryList entryList;
+    int i;
+
+    if (outList == NULL || counter == NULL)
         return NATS_INVALID_ARG;
 
     if (subjects == NULL || numSubjects <= 0)
     {
-        handler(counter, NULL, NATS_OK, closure);
+        outList->Entries  = NULL;
+        outList->Count = 0;
         return NATS_OK;
     }
 
-    for (int i = 0; i < numSubjects; i++)
+    jsBatchFetchOptions_Init(&bopts);
+    bopts.MultiLastFor = subjects;
+    bopts.MultiLastForLen = numSubjects;
+
+    s = jsBatchFetch_Fetch(&list, counter->nc, counter->stream, NULL, &bopts,
+                           timeout, NULL);
+
+    // The request is valid but the server has no data for any of the requested subjects
+    if (s == NATS_NOT_FOUND)
     {
-        natsCounterEntry *entry = NULL;
-        natsStatus        s = natsCounter_Get(counter, subjects[i], &entry);
-
-        if (s == NATS_NOT_FOUND || entry == NULL)
-            continue;
-
-        if (s != NATS_OK)
-        {
-            handler(counter, NULL, s, closure);
-            return s;
-        }
-
-        handler(counter, entry, NATS_OK, closure);
-        natsCounterEntry_Destroy(entry);
+        outList->Entries  = NULL;
+        outList->Count = 0;
+        return NATS_OK;
+    }
+    else if (s != NATS_OK)
+    {
+        natsMsgList_Destroy(&list);
+        return s;
     }
 
-    // Signal completion.
-    handler(counter, NULL, NATS_OK, closure);
+    entryList.Entries = (natsCounterEntry **)calloc(list.Count, sizeof(natsCounterEntry *));
+    if (entryList.Entries == NULL)
+    {
+        natsMsgList_Destroy(&list);
+        return NATS_NO_MEMORY;
+    }
+
+    for (i = 0; i < list.Count; i++)
+    {
+        natsCounterEntry *entry = NULL;
+        s = _msgToEntry(list.Msgs[i], &entry);
+        if (s != NATS_OK)
+        {
+            natsMsgList_Destroy(&list);
+            natsCounterEntryList_Destroy(&entryList);
+            return s;
+        }
+        entryList.Entries[i] = entry;
+        entryList.Count++;
+    }
+
+    natsMsgList_Destroy(&list);
+    *outList = entryList;
+
     return NATS_OK;
 }
 
@@ -395,4 +438,15 @@ natsCounterEntry_Destroy(natsCounterEntry *entry)
     free(entry->increment);
     natsCounterParser_FreeSources(entry->sources);
     free(entry);
+}
+
+void
+natsCounterEntryList_Destroy(natsCounterEntryList *list)
+{
+    if (list == NULL)
+        return;
+
+    for (int i = 0; i < list->Count; i++)
+        natsCounterEntry_Destroy(list->Entries[i]);
+    free(list->Entries);
 }

@@ -16,6 +16,7 @@
 
 #include <nats/nats.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,6 +72,15 @@ typedef struct __natsCounterEntry {
   struct natsCounterSource *sources; ///< Linked list; NULL if header absent.
 
 } natsCounterEntry;
+
+/** \brief A list of counter entries, used for batch retrieval.
+ *
+ * Used by some APIs which return a list of #natsCounterEntry objects.
+ */
+typedef struct __natsCounterEntryList {
+    natsCounterEntry **Entries;
+    int Count;
+} natsCounterEntryList;
 
 /** @} */ // end counterTypesGroup
 
@@ -131,12 +141,16 @@ typedef void (*natsCounterSourceIterFn)(const char *stream, const char *subject,
  *
  * @param counter receives the newly allocated counter.
  * @param js JetStream context.
+ * @param nc the NATS connection that backs `js`. Used by #natsCounter_GetMultiple
+ * for batched DIRECT.GET. Must outlive the counter.
  * @param stream name of the stream.
  * @return #NATS_OK on success, #NATS_INVALID_CONFIG if a
  * required stream flag is absent.
  */
 NATS_EXTERN natsStatus natsCounter_GetFromStream(natsCounter **counter,
-                                                 jsCtx *js, const char *stream);
+                                                 jsCtx *js,
+                                                 natsConnection *nc,
+                                                 const char *stream);
 
 /** \brief Releases all resources owned by `counter`.
  *
@@ -288,28 +302,32 @@ NATS_EXTERN natsStatus natsCounter_Get(natsCounter *counter,
 
 /** \brief Fetches counter entries for multiple subjects in a single batch.
  *
- * The `handler` callback is invoked once per result, in an unspecified order.
- * Non-existent subjects are silently skipped. When all results have been
- * delivered, the callback is invoked one final time with
- * a null entry to signal completion.
+ * Issues one batched DIRECT.GET request (ADR-31 multi-last) for the given
+ * subject list and invokes `handler` once per matching entry, then once
+ * more with a null entry to signal completion. Non-existent subjects are
+ * silently skipped by the server. `subjects` may contain NATS wildcard
+ * tokens.
  *
- * `subjects` may contain NATS wildcard tokens.
- *
- * \note: Currently this function issues one request per subject internally.
- * This will be updated to use batch fetch once implemented into orbit.c.
+ * The function blocks until the server's end-of-batch sentinel arrives
+ * or an internal timeout (5 seconds) elapses; entries are still
+ * streamed to `handler` as they are parsed.
  *
  * @param counter the counter.
  * @param subjects array of subject strings.
- * @param numSubjects number of elements in `subjects`.
- * @param handler callback invoked once per result.
+ * @param numSubjects number of elements in `subjects`. Must not exceed
+ * the server's multi-last cap (1024).
+ * @param handler callback invoked once per result, then once with a
+ * null entry to signal completion. On error, `handler` is invoked with
+ * a null entry and a non-OK status; no completion sentinel follows.
  * @param closure user-supplied pointer forwarded to `handler`.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounter_GetMultiple(natsCounter *counter,
-                                               const char **subjects,
-                                               int numSubjects,
-                                               natsCounterIterFn handler,
-                                               void *closure);
+NATS_EXTERN natsStatus
+natsCounter_GetMultiple(natsCounterEntryList  *outList,
+                        natsCounter           *counter,
+                        const char            **subjects,
+                        int                   numSubjects,
+                        uint64_t              timeout);
 
 /** \brief Returns `true` when the fetched message carries a Nats-Incr header.
  *
@@ -350,6 +368,9 @@ NATS_EXTERN natsStatus natsCounterEntry_IterSources(natsCounterEntry *entry,
  * @param entry the entry to destroy, or `NULL`.
  */
 NATS_EXTERN void natsCounterEntry_Destroy(natsCounterEntry *entry);
+
+NATS_EXTERN
+void natsCounterEntryList_Destroy(natsCounterEntryList *list);
 
 /** @} */ // end counterEntryGroup
 
