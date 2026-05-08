@@ -13,8 +13,7 @@
 
 #include "batch_fetch.h"
 
-#define NATS_EXTERNAL_LIB
-#include <nats/external_utils.h>
+#include "buf.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +30,13 @@
 #define HDR_DESCRIPTION     "Description"
 
 #define INITIAL_LIST_CAP    16
+
+#define COMMA_IF_NEEDED                           \
+    do {                                          \
+        if (s == NATS_OK && comma)                \
+            s = natsBuf_AppendByte(out, ',');     \
+        comma = true;                             \
+    } while (0)
 
 natsStatus
 jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
@@ -152,12 +158,6 @@ _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
     bool        emitSeq;
     int         i;
 
-#define COMMA_IF_NEEDED                                                  \
-    do {                                                                 \
-        if (s == NATS_OK && comma) s = natsBuf_AppendByte(out, ',');     \
-        comma = true;                                                    \
-    } while (0)
-
     if ((s = natsBuf_AppendByte(out, '{')) != NATS_OK)
         return s;
 
@@ -250,8 +250,6 @@ _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
 
     if (s == NATS_OK)
         s = natsBuf_AppendByte(out, '}');
-
-#undef COMMA_IF_NEEDED
 
     return s;
 }
@@ -552,8 +550,7 @@ jsBatchFetch_Fetch(natsMsgList         *list,
         goto cleanup;
 
     s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
-                                      natsBuf_GetData(stp.body),
-                                      natsBuf_GetLen(stp.body));
+                                      stp.body->data, stp.body->len);
     if (s != NATS_OK)
         goto cleanup;
 
@@ -709,8 +706,7 @@ jsBatchFetch_AsyncFetch(
         goto err;
 
     s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
-                                      natsBuf_GetData(stp.body),
-                                      natsBuf_GetLen(stp.body));
+                                      stp.body->data, stp.body->len);
     if (s != NATS_OK) {
         natsSubscription_Unsubscribe(sub);
     }

@@ -9,7 +9,7 @@ file(GLOB SOURCES "*.c")
 if(ORBIT_BUILD_LIB_SHARED)
   add_library(jetstream_extra SHARED ${SOURCES})
   target_link_libraries(jetstream_extra PUBLIC cnats::nats)
-  target_link_libraries(jetstream_extra PRIVATE ${ORBIT_EXTRA_LIB})
+  target_link_libraries(jetstream_extra PRIVATE orbit_utils ${ORBIT_EXTRA_LIB})
   set_target_properties(jetstream_extra PROPERTIES
     VERSION ${JETSTREAM_EXTRA_VERSION_MAJOR}.${JETSTREAM_EXTRA_VERSION_MINOR}.${JETSTREAM_EXTRA_VERSION_PATCH}
     SOVERSION ${JETSTREAM_EXTRA_VERSION_MAJOR}.${JETSTREAM_EXTRA_VERSION_MINOR}
@@ -23,7 +23,7 @@ endif()
 if(ORBIT_BUILD_LIB_STATIC)
   add_library(jetstream_extra_static STATIC ${SOURCES})
   target_link_libraries(jetstream_extra_static PUBLIC cnats::nats_static)
-  target_link_libraries(jetstream_extra_static PRIVATE ${ORBIT_EXTRA_LIB})
+  target_link_libraries(jetstream_extra_static PRIVATE orbit_utils_static ${ORBIT_EXTRA_LIB})
   target_compile_definitions(jetstream_extra_static PRIVATE JETSTREAM_EXTRA_STATIC)
   set_target_properties(jetstream_extra_static PROPERTIES DEBUG_POSTFIX d)
   target_include_directories(jetstream_extra_static PUBLIC
