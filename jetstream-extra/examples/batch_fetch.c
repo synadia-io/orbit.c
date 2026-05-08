@@ -72,7 +72,7 @@ int main(int argc, char **argv)
     jsBatchFetchOptions_Init(&opts);
     opts.Batch = 100;
 
-    s = jsBatchFetch(&list, nc, STREAM_NAME, NULL, &opts, 5000, NULL);
+    s = jsBatchFetch_Fetch(&list, nc, STREAM_NAME, NULL, &opts, 5000, NULL);
     if (s != NATS_OK) goto done;
 
     printf("Received %d messages:\n", list.Count);

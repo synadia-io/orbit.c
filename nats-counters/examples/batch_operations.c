@@ -27,56 +27,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STREAM_NAME "METRICS"
-#define URL         "nats://localhost:4222"
-
-// Closure passed to the batch callback to accumulate results.
-typedef struct
-{
-    int         count;
-    natsStatus  lastError;
-    bool        done;
-} BatchCtx;
-
-static void
-_onEntry(natsCounter *counter, natsCounterEntry *entry,
-         natsStatus status, void *closure)
-{
-    BatchCtx *ctx = (BatchCtx *)closure;
-
-    if (status != NATS_OK)
-    {
-        ctx->lastError = status;
-        ctx->done      = true;
-        return;
-    }
-
-    // NULL entry signals end of batch.
-    if (entry == NULL)
-    {
-        ctx->done = true;
-        return;
-    }
-
-    printf("  %-40s = %s", entry->subject,
-           entry->value);
-
-    if (natsCounterEntry_HasIncrement(entry))
-        printf("  (last incr: %s)", entry->increment);
-
-    printf("\n");
-    ctx->count++;
-}
+#define STREAM_NAME    "METRICS"
+#define URL            "nats://localhost:4222"
+#define BATCH_TIMEOUT  5000  // milliseconds
 
 int main(int argc, char **argv)
 {
-    natsStatus       s       = NATS_OK;
-    natsConnection  *nc      = NULL;
-    jsCtx           *js      = NULL;
-    natsCounter     *counter = NULL;
-    long long        value   = 0;
-    BatchCtx         ctx     = {0};
-    const char      *url     = (argc > 1) ? argv[1] : URL;
+    natsStatus           s       = NATS_OK;
+    natsConnection      *nc      = NULL;
+    jsCtx               *js      = NULL;
+    natsCounter         *counter = NULL;
+    long long            value   = 0;
+    natsCounterEntryList entries = {0};
+    const char          *url     = (argc > 1) ? argv[1] : URL;
 
     static const char *SERVICES[] = { "auth", "api", "db", "cache" };
     static const char *METRICS[]  = { "requests", "errors", "latency_ms" };
@@ -116,7 +79,7 @@ int main(int argc, char **argv)
         js_AddStream(NULL, js, &cfg, NULL, NULL);
     }
 
-    s = natsCounter_GetFromStream(&counter, js, STREAM_NAME);
+    s = natsCounter_GetFromStream(&counter, js, nc, STREAM_NAME);
     if (s != NATS_OK) goto done;
 
     // Populate counters
@@ -153,22 +116,29 @@ int main(int argc, char **argv)
 
     // Batch fetch all counters
     printf("\n=== Fetching Multiple Counters (Batch) ===\n\n");
-    printf("Fetched %d subjects in batch:\n\n", numSubjects);
+    printf("Requested %d subjects in batch:\n\n", numSubjects);
 
-    ctx.count = 0;
-    ctx.done  = false;
-    s = natsCounter_GetMultiple(counter, subjects, numSubjects, _onEntry, &ctx);
+    s = natsCounter_GetMultiple(&entries, counter, subjects, numSubjects,
+                                BATCH_TIMEOUT);
     if (s != NATS_OK) goto done;
 
-    if (ctx.lastError != NATS_OK)
+    for (i = 0; i < entries.Count; i++)
     {
-        s = ctx.lastError;
-        goto done;
+        natsCounterEntry *entry = entries.Entries[i];
+
+        printf("  %-40s = %s", entry->subject, entry->value);
+
+        if (natsCounterEntry_HasIncrement(entry))
+            printf("  (last incr: %s)", entry->increment);
+
+        printf("\n");
     }
 
-    printf("\nFetched %d entries.\n", ctx.count);
+    printf("\nFetched %d entries.\n", entries.Count);
 
 done:
+    natsCounterEntryList_Destroy(&entries);
+
     if (subjectBuf != NULL)
     {
         for (i = 0; i < numSubjects; i++)

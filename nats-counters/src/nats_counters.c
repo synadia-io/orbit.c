@@ -212,7 +212,7 @@ natsCounter_AddStr(natsCounter  *counter,
     if (s != NATS_OK)
         return s;
 
-    s = natsCounterParser_ParsePubAckValue(pa->Val, newValue);
+    s = natsCounterParser_ParsePubAckValue(pa->Value, newValue);
     jsPubAck_Destroy(pa);
 
     return s;
@@ -389,8 +389,8 @@ natsCounter_GetMultiple(natsCounterEntryList  *outList,
             return s;
         }
         entryList.Entries[i] = entry;
-        entryList.Count++;
     }
+    entryList.Count = list.Count;
 
     natsMsgList_Destroy(&list);
     *outList = entryList;
