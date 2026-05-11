@@ -177,8 +177,7 @@ jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, js
  * @param closure user-supplied pointer forwarded to both callbacks.
  * @return #NATS_OK once the request is in flight,
  * #NATS_INVALID_ARG for malformed options, or another #natsStatus
- * on setup failure. When this call returns non-OK, neither callback
- * will be invoked.
+ * on setup failure.
  */
 NATS_EXTERN natsStatus
 jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,

@@ -329,7 +329,7 @@ natsCounter_GetMultiple(natsCounterEntryList *outList,
                         natsCounter *counter,
                         const char **subjects,
                         int numSubjects,
-                        uint64_t timeout)
+                        int64_t timeout)
 {
     natsStatus s;
     jsBatchFetchOptions bopts;
@@ -373,6 +373,7 @@ natsCounter_GetMultiple(natsCounterEntryList *outList,
         natsMsgList_Destroy(&list);
         return NATS_NO_MEMORY;
     }
+    entryList.Count = 0;
 
     for (i = 0; i < list.Count; i++)
     {
@@ -385,8 +386,8 @@ natsCounter_GetMultiple(natsCounterEntryList *outList,
             return s;
         }
         entryList.Entries[i] = entry;
+        entryList.Count++;
     }
-    entryList.Count = list.Count;
 
     natsMsgList_Destroy(&list);
     *outList = entryList;

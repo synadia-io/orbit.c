@@ -317,7 +317,7 @@ natsCounter_Get(natsCounter *counter, const char *subject, natsCounterEntry **en
  */
 NATS_EXTERN natsStatus
 natsCounter_GetMultiple(natsCounterEntryList *outList, natsCounter *counter,
-                        const char **subjects, int numSubjects, uint64_t timeout);
+                        const char **subjects, int numSubjects, int64_t timeout);
 
 /** \brief Returns `true` when the fetched message carries a Nats-Incr header.
  *

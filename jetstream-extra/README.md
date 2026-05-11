@@ -22,7 +22,7 @@ natsConnection_ConnectTo(&nc, "nats://localhost:4222");
 jsBatchFetchOptions_Init(&opts);
 opts.Batch = 100;
 
-jsBatchFetch(&list, nc, "EVENTS", NULL, &opts, 5000, NULL);
+jsBatchFetch_Fetch(&list, nc, "EVENTS", NULL, &opts, 5000, NULL);
 
 for (int i = 0; i < list.Count; i++)
     /* ... use list.Msgs[i] ... */;
@@ -43,7 +43,7 @@ static void onDone(natsStatus s, jsErrCode je, void *closure) {
     /* fires exactly once when the batch terminates */
 }
 
-jsBatchFetchAsync(nc, "EVENTS", NULL, &opts, onMsg, onDone, NULL);
+jsBatchFetch_AsyncFetch(nc, "EVENTS", NULL, &opts, onMsg, onDone, NULL);
 ```
 
 # License
