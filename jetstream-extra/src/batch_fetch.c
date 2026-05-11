@@ -22,20 +22,21 @@
 #include <inttypes.h>
 #include <time.h>
 
-#define DEFAULT_API_PREFIX  "$JS.API."
-#define DIRECT_GET_INFIX    "DIRECT.GET."
-#define NATS_NUM_PENDING    "Nats-Num-Pending"
-#define NATS_UPTO_SEQUENCE  "Nats-UpTo-Sequence"
-#define HDR_STATUS          "Status"
-#define HDR_DESCRIPTION     "Description"
+#define DEFAULT_API_PREFIX "$JS.API."
+#define DIRECT_GET_INFIX   "DIRECT.GET."
+#define NATS_NUM_PENDING   "Nats-Num-Pending"
+#define NATS_UPTO_SEQUENCE "Nats-UpTo-Sequence"
+#define HDR_STATUS         "Status"
+#define HDR_DESCRIPTION    "Description"
 
-#define INITIAL_LIST_CAP    16
+#define INITIAL_LIST_CAP 16
 
-#define COMMA_IF_NEEDED                           \
-    do {                                          \
-        if (s == NATS_OK && comma)                \
-            s = natsBuf_AppendByte(out, ',');     \
-        comma = true;                             \
+#define COMMA_IF_NEEDED                       \
+    do                                        \
+    {                                         \
+        if (s == NATS_OK && comma)            \
+            s = natsBuf_AppendByte(out, ','); \
+        comma = true;                         \
     } while (0)
 
 natsStatus
@@ -52,12 +53,12 @@ jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
 static natsStatus
 _jsonAppendStringQuoted(natsBuffer *b, const char *s)
 {
-    natsStatus  st = natsBuf_AppendByte(b, '"');
+    natsStatus st = natsBuf_AppendByte(b, '"');
     const char *p;
 
     for (p = s; *p != '\0' && st == NATS_OK; p++)
     {
-        unsigned char c = (unsigned char) *p;
+        unsigned char c = (unsigned char)*p;
         switch (c)
         {
             case '"':
@@ -67,25 +68,25 @@ _jsonAppendStringQuoted(natsBuffer *b, const char *s)
                 st = natsBuf_Append(b, "\\\\", 2);
                 break;
             case '\b':
-                st = natsBuf_Append(b, "\\b",  2);
+                st = natsBuf_Append(b, "\\b", 2);
                 break;
             case '\f':
-                st = natsBuf_Append(b, "\\f",  2);
+                st = natsBuf_Append(b, "\\f", 2);
                 break;
             case '\n':
-                st = natsBuf_Append(b, "\\n",  2);
+                st = natsBuf_Append(b, "\\n", 2);
                 break;
             case '\r':
-                st = natsBuf_Append(b, "\\r",  2);
+                st = natsBuf_Append(b, "\\r", 2);
                 break;
             case '\t':
-                st = natsBuf_Append(b, "\\t",  2);
+                st = natsBuf_Append(b, "\\t", 2);
                 break;
             default:
                 if (c < 0x20)
                 {
                     char buf[8];
-                    int  n = snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    int n = snprintf(buf, sizeof(buf), "\\u%04x", c);
                     st = natsBuf_Append(b, buf, n);
                 }
                 else
@@ -104,7 +105,7 @@ static natsStatus
 _jsonAppendU64(natsBuffer *b, uint64_t v)
 {
     char tmp[32];
-    int  n = snprintf(tmp, sizeof(tmp), "%" PRIu64, v);
+    int n = snprintf(tmp, sizeof(tmp), "%" PRIu64, v);
     if (n < 0 || n >= (int)sizeof(tmp))
         return NATS_ERR;
     return natsBuf_Append(b, tmp, n);
@@ -114,7 +115,7 @@ static natsStatus
 _jsonAppendInt(natsBuffer *b, int v)
 {
     char tmp[16];
-    int  n = snprintf(tmp, sizeof(tmp), "%d", v);
+    int n = snprintf(tmp, sizeof(tmp), "%d", v);
     if (n < 0 || n >= (int)sizeof(tmp))
         return NATS_ERR;
     return natsBuf_Append(b, tmp, n);
@@ -123,11 +124,11 @@ _jsonAppendInt(natsBuffer *b, int v)
 static natsStatus
 _jsonAppendTimeRFC3339(natsBuffer *b, uint64_t nsec)
 {
-    time_t     secs   = (time_t)(nsec / 1000000000ULL);
-    uint32_t   nanos  = (uint32_t)(nsec % 1000000000ULL);
-    struct tm  tm;
-    char       tmp[48];
-    int        n;
+    time_t secs = (time_t)(nsec / 1000000000ULL);
+    uint32_t nanos = (uint32_t)(nsec % 1000000000ULL);
+    struct tm tm;
+    char tmp[48];
+    int n;
 
     if (gmtime_r(&secs, &tm) == NULL)
         return NATS_ERR;
@@ -150,13 +151,13 @@ _appendLit(natsBuffer *b, const char *s)
 static natsStatus
 _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
 {
-    natsStatus  s        = NATS_OK;
-    bool        comma   = false;
-    bool        haveSeq = (bopts->Sequence > 0);
-    bool        haveT   = (bopts->StartTime > 0);
-    bool        haveML  = (bopts->MultiLastFor != NULL && bopts->MultiLastForLen > 0);
-    bool        emitSeq;
-    int         i;
+    natsStatus s = NATS_OK;
+    bool comma = false;
+    bool haveSeq = (bopts->Sequence > 0);
+    bool haveT = (bopts->StartTime > 0);
+    bool haveML = (bopts->MultiLastFor != NULL && bopts->MultiLastForLen > 0);
+    bool emitSeq;
+    int i;
 
     if ((s = natsBuf_AppendByte(out, '{')) != NATS_OK)
         return s;
@@ -227,7 +228,8 @@ _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
                 s = _jsonAppendStringQuoted(out, subj);
             }
         }
-        if (s == NATS_OK) s = natsBuf_AppendByte(out, ']');
+        if (s == NATS_OK)
+            s = natsBuf_AppendByte(out, ']');
     }
 
     if (s == NATS_OK && bopts->UpToSeq > 0)
@@ -262,15 +264,15 @@ static natsStatus
 _buildSubject(char **out, jsOptions *opts, const char *stream)
 {
     const char *prefix = (opts != NULL && opts->Prefix != NULL && opts->Prefix[0] != '\0')
-                            ? opts->Prefix
-                            : DEFAULT_API_PREFIX;
+                             ? opts->Prefix
+                             : DEFAULT_API_PREFIX;
 
-    size_t      plen   = strlen(prefix);
-    size_t      slen   = strlen(stream);
-    bool        addDot = (plen == 0) || (prefix[plen - 1] != '.');
-    size_t      total  = plen + (addDot ? 1 : 0) + strlen(DIRECT_GET_INFIX) + slen + 1;
-    char       *buf    = (char *)malloc(total);
-    char       *p;
+    size_t plen = strlen(prefix);
+    size_t slen = strlen(stream);
+    bool addDot = (plen == 0) || (prefix[plen - 1] != '.');
+    size_t total = plen + (addDot ? 1 : 0) + strlen(DIRECT_GET_INFIX) + slen + 1;
+    char *buf = (char *)malloc(total);
+    char *p;
 
     if (buf == NULL)
         return NATS_NO_MEMORY;
@@ -326,12 +328,13 @@ _validate(const char *stream, const jsBatchFetchOptions *bopts)
 
 typedef enum
 {
-    KIND_DATA = 0,        ///< A real message to deliver to the caller.
-    KIND_TERM_OK,         ///< Clean end-of-batch sentinel.
-    KIND_ERR_404,         ///< No matching messages.
-    KIND_ERR_408,         ///< Bad request.
-    KIND_ERR_413,         ///< Payload-too-large / too many subjects.
-    KIND_UNSUPPORTED      ///< Server lacks batch DIRECT.GET (no Nats-Num-Pending).
+    KIND_DATA = 0,   ///< A real message to deliver to the caller.
+    KIND_TERM_OK,    ///< Clean end-of-batch sentinel.
+    KIND_ERR_404,    ///< No matching messages.
+    KIND_ERR_408,    ///< Bad request.
+    KIND_ERR_413,    ///< Payload-too-large / too many subjects.
+    KIND_UNSUPPORTED ///< Server lacks batch DIRECT.GET (no Nats-Num-Pending).
+
 } _msgKind;
 
 static const char *
@@ -346,17 +349,17 @@ _hdr(natsMsg *msg, const char *key)
 static _msgKind
 _classify(natsMsg *msg, bool firstMessageCheck)
 {
-    int          dataLen = natsMsg_GetDataLength(msg);
-    const char  *status;
-    const char  *desc;
-    const char  *seq;
-    const char  *numPending;
-    const char  *upToSeq;
+    int dataLen = natsMsg_GetDataLength(msg);
+    const char *status;
+    const char *desc;
+    const char *seq;
+    const char *numPending;
+    const char *upToSeq;
 
     if (dataLen == 0)
     {
         status = _hdr(msg, HDR_STATUS);
-        desc   = _hdr(msg, HDR_DESCRIPTION);
+        desc = _hdr(msg, HDR_DESCRIPTION);
 
         if (status != NULL)
         {
@@ -370,9 +373,9 @@ _classify(natsMsg *msg, bool firstMessageCheck)
                 return KIND_TERM_OK;
         }
 
-        seq        = _hdr(msg, JSSequence);
+        seq = _hdr(msg, JSSequence);
         numPending = _hdr(msg, NATS_NUM_PENDING);
-        upToSeq    = _hdr(msg, NATS_UPTO_SEQUENCE);
+        upToSeq = _hdr(msg, NATS_UPTO_SEQUENCE);
 
         if (status == NULL && seq == NULL && numPending == NULL && upToSeq == NULL)
             return KIND_TERM_OK;
@@ -399,7 +402,8 @@ _kindToStatus(_msgKind k, jsErrCode *errCodeOut)
         case KIND_ERR_404:
             return NATS_NOT_FOUND;
         case KIND_ERR_408:
-            if (errCodeOut != NULL) *errCodeOut = JSBadRequestErr;
+            if (errCodeOut != NULL)
+                *errCodeOut = JSBadRequestErr;
             return NATS_ERR;
         case KIND_ERR_413:
             return NATS_ERR;
@@ -426,16 +430,17 @@ _nowMs(void)
 
 typedef struct
 {
-    char        *subj;
-    char        *inbox;   // owned natsInbox; freed with natsInbox_Destroy
-    natsBuffer  *body;
+    char       *subj;
+    char       *inbox; // owned natsInbox; freed with natsInbox_Destroy
+    natsBuffer *body;
+
 } _setupCtx;
 
 static void
 _setupFree(_setupCtx *c)
 {
     free(c->subj);
-    c->subj  = NULL;
+    c->subj = NULL;
     natsInbox_Destroy(c->inbox);
     c->inbox = NULL;
     natsBuf_Destroy(c->body);
@@ -443,13 +448,10 @@ _setupFree(_setupCtx *c)
 }
 
 static natsStatus
-_setup(const char          *stream,
-       jsOptions           *opts,
-       jsBatchFetchOptions *bopts,
-       _setupCtx           *out)
+_setup(const char *stream, jsOptions *opts, jsBatchFetchOptions *bopts, _setupCtx *out)
 {
     natsStatus s;
-    size_t     bodyHint;
+    size_t bodyHint;
 
     memset(out, 0, sizeof(*out));
 
@@ -464,17 +466,20 @@ _setup(const char          *stream,
     // Pre-size the body buffer: small for non-multi-last; for multi-last,
     // estimate ~64 bytes per subject to avoid repeated reallocs.
     bodyHint = (bopts->MultiLastFor != NULL && bopts->MultiLastForLen > 0)
-                ? (size_t)64 + (size_t)bopts->MultiLastForLen * 64
-                : 128;
+                   ? (size_t)64 + (size_t)bopts->MultiLastForLen * 64
+                   : 128;
 
     s = natsBuf_Create(&out->body, (int)bodyHint);
-    if (s != NATS_OK) goto err;
+    if (s != NATS_OK)
+        goto err;
 
     s = _buildRequest(out->body, bopts);
-    if (s != NATS_OK) goto err;
+    if (s != NATS_OK)
+        goto err;
 
     s = natsInbox_Create(&out->inbox);
-    if (s != NATS_OK) goto err;
+    if (s != NATS_OK)
+        goto err;
 
     return NATS_OK;
 
@@ -488,7 +493,7 @@ err:
 static natsStatus
 _growList(natsMsg ***arr, int *cap, int len)
 {
-    int       newCap;
+    int newCap;
     natsMsg **p;
 
     if (len < *cap)
@@ -505,21 +510,16 @@ _growList(natsMsg ***arr, int *cap, int len)
 }
 
 natsStatus
-jsBatchFetch_Fetch(natsMsgList         *list,
-                   natsConnection      *nc,
-                   const char          *stream,
-                   jsOptions           *opts,
-                   jsBatchFetchOptions *bopts,
-                   int64_t              timeout,
-                   jsErrCode           *errCode)
+jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, jsOptions *opts,
+                   jsBatchFetchOptions *bopts, int64_t timeout, jsErrCode *errCode)
 {
-    natsStatus         s;
-    _setupCtx          stp    = {0};
-    natsSubscription  *sub    = NULL;
-    natsMsg          **msgs   = NULL;
-    int                msgCap = 0;
-    int                msgLen = 0;
-    int64_t            deadline;
+    natsStatus s;
+    _setupCtx stp = { 0 };
+    natsSubscription *sub = NULL;
+    natsMsg **msgs = NULL;
+    int msgCap = 0;
+    int msgLen = 0;
+    int64_t deadline;
 
     if (errCode != NULL)
         *errCode = (jsErrCode)0;
@@ -527,7 +527,7 @@ jsBatchFetch_Fetch(natsMsgList         *list,
     if (list == NULL || nc == NULL || timeout <= 0)
         return NATS_INVALID_ARG;
 
-    list->Msgs  = NULL;
+    list->Msgs = NULL;
     list->Count = 0;
 
     s = _setup(stream, opts, bopts, &stp);
@@ -538,7 +538,8 @@ jsBatchFetch_Fetch(natsMsgList         *list,
     if (bopts->Batch > 0)
     {
         msgs = (natsMsg **)malloc((size_t)bopts->Batch * sizeof(natsMsg *));
-        if (msgs == NULL) {
+        if (msgs == NULL)
+        {
             s = NATS_NO_MEMORY;
             goto cleanup;
         }
@@ -558,11 +559,12 @@ jsBatchFetch_Fetch(natsMsgList         *list,
 
     while (s == NATS_OK)
     {
-        natsMsg  *m       = NULL;
-        int64_t   leftMs  = deadline - _nowMs();
-        _msgKind  kind;
+        natsMsg *m = NULL;
+        int64_t leftMs = deadline - _nowMs();
+        _msgKind kind;
 
-        if (leftMs <= 0) {
+        if (leftMs <= 0)
+        {
             s = NATS_TIMEOUT;
             break;
         }
@@ -576,7 +578,8 @@ jsBatchFetch_Fetch(natsMsgList         *list,
         if (kind == KIND_DATA)
         {
             s = _growList(&msgs, &msgCap, msgLen);
-            if (s != NATS_OK) {
+            if (s != NATS_OK)
+            {
                 natsMsg_Destroy(m);
                 break;
             }
@@ -597,7 +600,7 @@ cleanup:
     }
     _setupFree(&stp);
 
-    list->Msgs  = msgs;
+    list->Msgs = msgs;
     list->Count = msgLen;
     return s;
 }
@@ -605,21 +608,22 @@ cleanup:
 // Async API
 typedef struct
 {
-    natsSubscription           *sub;
+    natsSubscription            *sub;
     natsMsgHandler              userMsgCB;
     jsBatchFetchCompleteHandler doneCB;
-    void                       *closure;
+    void                        *closure;
     natsStatus                  finalStatus;
     jsErrCode                   finalErr;
     bool                        done;
     bool                        firstChecked;
+
 } _asyncCtx;
 
 static void
 _asyncOnMsg(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
 {
     _asyncCtx *ctx = (_asyncCtx *)closure;
-    _msgKind   kind;
+    _msgKind kind;
 
     if (ctx->done)
     {
@@ -642,7 +646,7 @@ _asyncOnMsg(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closu
     // The final cleanup (user's doneCB + ctx free + sub destroy) runs in
     // the OnComplete handler once the dispatcher has fully exited.
     ctx->finalStatus = _kindToStatus(kind, &ctx->finalErr);
-    ctx->done        = true;
+    ctx->done = true;
 
     natsMsg_Destroy(msg);
     natsSubscription_Unsubscribe(sub);
@@ -665,19 +669,14 @@ _asyncOnComplete(void *closure)
 }
 
 natsStatus
-jsBatchFetch_AsyncFetch(
-                  natsConnection              *nc,
-                  const char                  *stream,
-                  jsOptions                   *opts,
-                  jsBatchFetchOptions         *bopts,
-                  natsMsgHandler               msgCB,
-                  jsBatchFetchCompleteHandler  doneCB,
-                  void                        *closure)
+jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
+                        jsBatchFetchOptions *bopts, natsMsgHandler msgCB,
+                        jsBatchFetchCompleteHandler doneCB, void *closure)
 {
-    natsStatus         s;
-    _setupCtx          stp = {0};
-    natsSubscription  *sub = NULL;
-    _asyncCtx         *ctx = NULL;
+    natsStatus s;
+    _setupCtx stp = { 0 };
+    natsSubscription *sub = NULL;
+    _asyncCtx *ctx = NULL;
 
     if (nc == NULL || msgCB == NULL || doneCB == NULL)
         return NATS_INVALID_ARG;
@@ -687,14 +686,15 @@ jsBatchFetch_AsyncFetch(
         return s;
 
     ctx = (_asyncCtx *)calloc(1, sizeof(*ctx));
-    if (ctx == NULL) {
+    if (ctx == NULL)
+    {
         s = NATS_NO_MEMORY;
         goto err;
     }
 
     ctx->userMsgCB = msgCB;
-    ctx->doneCB    = doneCB;
-    ctx->closure   = closure;
+    ctx->doneCB = doneCB;
+    ctx->closure = closure;
 
     s = natsConnection_Subscribe(&sub, nc, stp.inbox, _asyncOnMsg, ctx);
     if (s != NATS_OK)
@@ -707,7 +707,8 @@ jsBatchFetch_AsyncFetch(
 
     s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
                                       stp.body->data, stp.body->len);
-    if (s != NATS_OK) {
+    if (s != NATS_OK)
+    {
         natsSubscription_Unsubscribe(sub);
     }
 

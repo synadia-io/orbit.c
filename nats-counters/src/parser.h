@@ -22,7 +22,8 @@
 #include <stddef.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // natsCounterSource is a node in the linked list produced by
@@ -31,11 +32,12 @@ extern "C" {
 //
 // The stream, subject, and value fields are heap-allocated; the entire list
 // is freed with natsCounterParser_FreeSources().
-typedef struct natsCounterSource {
-    char                      *stream;
-    char                      *subject;
-    char                      *value; // decimal string, arbitrary precision
-    struct natsCounterSource  *next;
+typedef struct natsCounterSource
+{
+    char *stream;
+    char *subject;
+    char *value; // decimal string, arbitrary precision
+    struct natsCounterSource *next;
 
 } natsCounterSource;
 
@@ -45,9 +47,9 @@ typedef struct natsCounterSource {
 //
 // On success, *value is set to a heap-allocated null-terminated decimal
 // string.  Caller must free() it.
-natsStatus natsCounterParser_ParseValue(const unsigned char *data,
-                                         int                  dataLen,
-                                         char               **value);
+natsStatus
+natsCounterParser_ParseValue(const unsigned char *data,
+                             int dataLen, char **value);
 
 // natsCounterParser_ParsePubAckValue extracts the counter total returned
 // in the PubAck "val" field.
@@ -56,28 +58,32 @@ natsStatus natsCounterParser_ParseValue(const unsigned char *data,
 // stream does not have allow_msg_counter enabled).
 // Returns NATS_NOT_FOUND when ackVal is NULL.
 // On success, *value is heap-allocated; caller must free() it.
-natsStatus natsCounterParser_ParsePubAckValue(const char  *ackVal,
-                                               char       **value);
+natsStatus
+natsCounterParser_ParsePubAckValue(const char *ackVal,
+                                   char **value);
 
 // natsCounterParser_ParseSources parses the Nats-Counter-Sources header.
 //
 // headerValue is the raw header string (may be NULL, producing an empty list).
 // On success, *sources is set to the head of a linked list (possibly NULL if
 // the object is empty).  Free with natsCounterParser_FreeSources().
-natsStatus natsCounterParser_ParseSources(const char         *headerValue,
-                                           natsCounterSource **sources);
+natsStatus
+natsCounterParser_ParseSources(const char *headerValue,
+                               natsCounterSource **sources);
 
 // natsCounterParser_FreeSources releases the list returned by
 // natsCounterParser_ParseSources().  Passing NULL is a no-op.
-void natsCounterParser_FreeSources(natsCounterSource *sources);
+void
+natsCounterParser_FreeSources(natsCounterSource *sources);
 
 // natsCounterParser_ParseIncrement parses the Nats-Incr header value.
 //
 // headerValue is the raw header string (may be NULL).
 // Returns NATS_NOT_FOUND when headerValue is NULL.
 // On success, *increment is heap-allocated; caller must free() it.
-natsStatus natsCounterParser_ParseIncrement(const char  *headerValue,
-                                             char       **increment);
+natsStatus
+natsCounterParser_ParseIncrement(const char *headerValue,
+                                 char **increment);
 
 #ifdef __cplusplus
 }

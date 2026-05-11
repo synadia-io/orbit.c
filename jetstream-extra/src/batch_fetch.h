@@ -19,28 +19,29 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /** \def JS_BATCH_FETCH_MAX_BATCH
  *  \brief Server-imposed upper bound on the number of messages a single
  *  batch fetch may return.
  */
-#define JS_BATCH_FETCH_MAX_BATCH        1000
+#define JS_BATCH_FETCH_MAX_BATCH 1000
 
 /** \def JS_BATCH_FETCH_MAX_SUBJECTS
  *  \brief Server-imposed upper bound on the number of subjects passed to
  *  the multi-last form of a batch fetch.
  */
-#define JS_BATCH_FETCH_MAX_SUBJECTS     1024
+#define JS_BATCH_FETCH_MAX_SUBJECTS 1024
 
-/** \defgroup jsBatchFetchGroup Batch Fetch
+    /** \defgroup jsBatchFetchGroup Batch Fetch
  *
  * Batch fetch API
  * @{
  */
 
-/** \defgroup jsBatchFetchTypesGroup Types
+    /** \defgroup jsBatchFetchTypesGroup Types
  *
  *  Batch fetch types.
  *  @{
@@ -95,8 +96,8 @@ typedef struct jsBatchFetchOptions
  * applicable.
  * @param closure the user-supplied pointer passed to #jsBatchFetch_AsyncFetch.
  */
-typedef void (*jsBatchFetchCompleteHandler)(natsStatus  status,
-                                            jsErrCode   jsErr,
+typedef void (*jsBatchFetchCompleteHandler)(natsStatus status,
+                                            jsErrCode  jsErr,
                                             void       *closure);
 
 /** @} */ // end jsBatchFetchCallbacksGroup
@@ -149,13 +150,8 @@ jsBatchFetchOptions_Init(jsBatchFetchOptions *opts);
  * batched DIRECT.GET, or another #natsStatus for transport errors.
  */
 NATS_EXTERN natsStatus
-jsBatchFetch_Fetch(natsMsgList         *list,
-                   natsConnection      *nc,
-                   const char          *stream,
-                   jsOptions           *opts,
-                   jsBatchFetchOptions *bopts,
-                   int64_t              timeout,
-                   jsErrCode           *errCode);
+jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, jsOptions *opts,
+                   jsBatchFetchOptions *bopts, int64_t timeout, jsErrCode *errCode);
 
 /** \brief Asynchronously fetches a batch of messages from a JetStream stream.
  *
@@ -185,13 +181,9 @@ jsBatchFetch_Fetch(natsMsgList         *list,
  * will be invoked.
  */
 NATS_EXTERN natsStatus
-jsBatchFetch_AsyncFetch(natsConnection              *nc,
-                        const char                  *stream,
-                        jsOptions                   *opts,
-                        jsBatchFetchOptions         *bopts,
-                        natsMsgHandler               msgCB,
-                        jsBatchFetchCompleteHandler  doneCB,
-                        void                        *closure);
+jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
+                        jsBatchFetchOptions *bopts, natsMsgHandler msgCB,
+                        jsBatchFetchCompleteHandler doneCB, void *closure);
 
 /** @} */ // end jsBatchFetchFuncGroup
 /** @} */ // end jsBatchFetchGroup

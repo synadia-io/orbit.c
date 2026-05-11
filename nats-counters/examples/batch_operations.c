@@ -27,30 +27,31 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define STREAM_NAME    "METRICS"
-#define URL            "nats://localhost:4222"
-#define BATCH_TIMEOUT  5000  // milliseconds
+#define STREAM_NAME   "METRICS"
+#define URL           "nats://localhost:4222"
+#define BATCH_TIMEOUT 5000 // milliseconds
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
-    natsStatus           s       = NATS_OK;
-    natsConnection      *nc      = NULL;
-    jsCtx               *js      = NULL;
-    natsCounter         *counter = NULL;
-    long long            value   = 0;
-    natsCounterEntryList entries = {0};
-    const char          *url     = (argc > 1) ? argv[1] : URL;
+    natsStatus s = NATS_OK;
+    natsConnection *nc = NULL;
+    jsCtx *js = NULL;
+    natsCounter *counter = NULL;
+    long long value = 0;
+    natsCounterEntryList entries = { 0 };
+    const char *url = (argc > 1) ? argv[1] : URL;
 
     static const char *SERVICES[] = { "auth", "api", "db", "cache" };
-    static const char *METRICS[]  = { "requests", "errors", "latency_ms" };
-    static const int   N_SVC      = 4;
-    static const int   N_MET      = 3;
+    static const char *METRICS[] = { "requests", "errors", "latency_ms" };
+    static const int N_SVC = 4;
+    static const int N_MET = 3;
 
     // Build subject arrays
-    int         numSubjects  = N_SVC * N_MET;
-    const char **subjects    = calloc(numSubjects, sizeof(char *));
-    char        **subjectBuf = calloc(numSubjects, sizeof(char *));
-    int          i, j, idx  = 0;
+    int numSubjects = N_SVC * N_MET;
+    const char **subjects = calloc(numSubjects, sizeof(char *));
+    char **subjectBuf = calloc(numSubjects, sizeof(char *));
+    int i, j, idx = 0;
 
     if (subjects == NULL || subjectBuf == NULL)
     {
@@ -61,33 +62,36 @@ int main(int argc, char **argv)
     printf("=== Adding Counter Values ===\n\n");
 
     s = natsConnection_ConnectTo(&nc, url);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     s = natsConnection_JetStream(&js, nc, NULL);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     // Create the stream (ignore error if it already exists).
     {
         jsStreamConfig cfg;
 
         jsStreamConfig_Init(&cfg);
-        cfg.Name            = STREAM_NAME;
-        cfg.Subjects        = (const char *[]){"metrics.>"};
-        cfg.SubjectsLen     = 1;
+        cfg.Name = STREAM_NAME;
+        cfg.Subjects = (const char *[]){ "metrics.>" };
+        cfg.SubjectsLen = 1;
         cfg.AllowMsgCounter = true;
-        cfg.AllowDirect     = true;
+        cfg.AllowDirect = true;
         js_AddStream(NULL, js, &cfg, NULL, NULL);
     }
 
     s = natsCounter_GetFromStream(&counter, js, nc, STREAM_NAME);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     // Populate counters
     for (i = 0; i < N_SVC; i++)
     {
         for (j = 0; j < N_MET; j++)
         {
-            char  buf[64];
+            char buf[64];
             long long val;
 
             snprintf(buf, sizeof(buf), "metrics.%s.%s", SERVICES[i], METRICS[j]);
@@ -100,7 +104,8 @@ int main(int argc, char **argv)
                 val = 50 + (long long)(strlen(SERVICES[i]) * 5);
 
             s = natsCounter_Add(counter, buf, val, &value);
-            if (s != NATS_OK) goto done;
+            if (s != NATS_OK)
+                goto done;
             printf("  %s = %lld\n", buf, value);
 
             subjectBuf[idx] = strdup(buf);
@@ -109,7 +114,7 @@ int main(int argc, char **argv)
                 s = NATS_NO_MEMORY;
                 goto done;
             }
-            subjects[idx]   = subjectBuf[idx];
+            subjects[idx] = subjectBuf[idx];
             idx++;
         }
     }
@@ -120,7 +125,8 @@ int main(int argc, char **argv)
 
     s = natsCounter_GetMultiple(&entries, counter, subjects, numSubjects,
                                 BATCH_TIMEOUT);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     for (i = 0; i < entries.Count; i++)
     {
@@ -148,8 +154,10 @@ done:
     free(subjects);
 
     natsCounter_Destroy(counter);
-    if (js != NULL) jsCtx_Destroy(js);
-    if (nc != NULL) natsConnection_Destroy(nc);
+    if (js != NULL)
+        jsCtx_Destroy(js);
+    if (nc != NULL)
+        natsConnection_Destroy(nc);
 
     if (s != NATS_OK)
     {

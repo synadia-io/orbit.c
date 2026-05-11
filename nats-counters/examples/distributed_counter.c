@@ -44,9 +44,12 @@ _printSource(const char *stream, const char *subject, const char *value,
              void *closure)
 {
     const char *region = stream;
-    if (strcmp(stream, "REGION_US_EAST") == 0) region = "US-East";
-    else if (strcmp(stream, "REGION_US_WEST") == 0) region = "US-West";
-    else if (strcmp(stream, "REGION_EU") == 0)      region = "EU";
+    if (strcmp(stream, "REGION_US_EAST") == 0)
+        region = "US-East";
+    else if (strcmp(stream, "REGION_US_WEST") == 0)
+        region = "US-West";
+    else if (strcmp(stream, "REGION_EU") == 0)
+        region = "EU";
 
     printf("    %-10s: %s  (from %s)\n", region, value, subject);
 }
@@ -56,7 +59,7 @@ _printEntryWithSources(natsCounter *counter, const char *subject,
                        const char *label)
 {
     natsCounterEntry *entry = NULL;
-    natsStatus        s;
+    natsStatus s;
 
     s = natsCounter_Get(counter, subject, &entry);
     if (s != NATS_OK)
@@ -78,11 +81,11 @@ _createRegionalStream(jsCtx *js, const char *name, const char *subjectFilter)
     jsStreamConfig cfg;
 
     jsStreamConfig_Init(&cfg);
-    cfg.Name            = name;
-    cfg.Subjects        = &subjectFilter;
-    cfg.SubjectsLen     = 1;
+    cfg.Name = name;
+    cfg.Subjects = &subjectFilter;
+    cfg.SubjectsLen = 1;
     cfg.AllowMsgCounter = true;
-    cfg.AllowDirect     = true;
+    cfg.AllowDirect = true;
 
     return js_AddStream(NULL, js, &cfg, NULL, NULL);
 }
@@ -95,9 +98,9 @@ _createGlobalStream(jsCtx *js)
     jsStreamSource *sources[3];
 
     jsStreamConfig_Init(&cfg);
-    cfg.Name            = "GLOBAL";
+    cfg.Name = "GLOBAL";
     cfg.AllowMsgCounter = true;
-    cfg.AllowDirect     = true;
+    cfg.AllowDirect = true;
 
     jsStreamSource_Init(&s1);
     s1.Name = "REGION_US_EAST";
@@ -106,87 +109,104 @@ _createGlobalStream(jsCtx *js)
     jsStreamSource_Init(&s3);
     s3.Name = "REGION_EU";
 
-    sources[0]     = &s1;
-    sources[1]     = &s2;
-    sources[2]     = &s3;
-    cfg.Sources    = sources;
+    sources[0] = &s1;
+    sources[1] = &s2;
+    sources[2] = &s3;
+    cfg.Sources = sources;
     cfg.SourcesLen = 3;
 
     return js_AddStream(NULL, js, &cfg, NULL, NULL);
 }
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
-    natsStatus           s           = NATS_OK;
-    natsConnection      *nc          = NULL;
-    jsCtx               *js          = NULL;
-    natsCounter         *usEast      = NULL;
-    natsCounter         *usWest      = NULL;
-    natsCounter         *eu          = NULL;
-    natsCounter         *global      = NULL;
-    long long            value       = 0;
-    const char          *url         = (argc > 1) ? argv[1] : URL;
+    natsStatus s = NATS_OK;
+    natsConnection *nc = NULL;
+    jsCtx *js = NULL;
+    natsCounter *usEast = NULL;
+    natsCounter *usWest = NULL;
+    natsCounter *eu = NULL;
+    natsCounter *global = NULL;
+    long long value = 0;
+    const char *url = (argc > 1) ? argv[1] : URL;
 
     printf("=== Setting Up Regional Counters ===\n\n");
 
     s = natsConnection_ConnectTo(&nc, url);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     s = natsConnection_JetStream(&js, nc, NULL);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     // Create regional streams and the global aggregation stream.
     s = _createRegionalStream(js, "REGION_US_EAST", "us-east.>");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("Created US-East regional stream\n");
 
     s = _createRegionalStream(js, "REGION_US_WEST", "us-west.>");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("Created US-West regional stream\n");
 
     s = _createRegionalStream(js, "REGION_EU", "eu.>");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("Created EU regional stream\n");
 
     s = _createGlobalStream(js);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("Created global stream sourcing from all regions\n\n");
 
     // Get counters for each stream.
     s = natsCounter_GetFromStream(&usEast, js, nc, "REGION_US_EAST");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     s = natsCounter_GetFromStream(&usWest, js, nc, "REGION_US_WEST");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     s = natsCounter_GetFromStream(&eu, js, nc, "REGION_EU");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     s = natsCounter_GetFromStream(&global, js, nc, "GLOBAL");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     // Simulate regional traffic.
     printf("=== Simulating Regional Traffic ===\n\n");
 
     printf("US-East region:\n");
     s = natsCounter_Add(usEast, "us-east.api.requests", 1500, &value);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("  API requests: %lld\n", value);
     s = natsCounter_Add(usEast, "us-east.api.errors", 23, &value);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("  API errors:   %lld\n\n", value);
 
     printf("US-West region:\n");
     s = natsCounter_Add(usWest, "us-west.api.requests", 2100, &value);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("  API requests: %lld\n", value);
     s = natsCounter_Add(usWest, "us-west.api.errors", 15, &value);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("  API errors:   %lld\n\n", value);
 
     printf("EU region:\n");
     s = natsCounter_Add(eu, "eu.api.requests", 800, &value);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("  API requests: %lld\n", value);
     s = natsCounter_Add(eu, "eu.api.errors", 7, &value);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
     printf("  API errors:   %lld\n\n", value);
 
     // Allow time for source propagation before reading globals.
@@ -195,21 +215,26 @@ int main(int argc, char **argv)
     printf("=== Global View (per-region entries) ===\n\n");
 
     s = _printEntryWithSources(global, "us-east.api.requests", "US-East API Requests:");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     s = _printEntryWithSources(global, "us-west.api.requests", "US-West API Requests:");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     s = _printEntryWithSources(global, "eu.api.requests", "EU API Requests:");
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
 done:
     natsCounter_Destroy(usEast);
     natsCounter_Destroy(usWest);
     natsCounter_Destroy(eu);
     natsCounter_Destroy(global);
-    if (js != NULL) jsCtx_Destroy(js);
-    if (nc != NULL) natsConnection_Destroy(nc);
+    if (js != NULL)
+        jsCtx_Destroy(js);
+    if (nc != NULL)
+        natsConnection_Destroy(nc);
 
     if (s != NATS_OK)
     {

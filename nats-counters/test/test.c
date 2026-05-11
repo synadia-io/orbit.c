@@ -43,7 +43,8 @@ typedef void (*testFunc)(void);
 typedef struct
 {
     const char *name;
-    testFunc    func;
+    testFunc   func;
+
 } testInfo;
 
 #define _TEST_PROTO
@@ -51,35 +52,50 @@ typedef struct
 #undef _TEST_PROTO
 
 #define _TEST_LIST
-static testInfo allTests[] =
-{
+static testInfo allTests[] = {
 #include "list.h"
 };
 #undef _TEST_LIST
 
-static int  tests   = 0;
-static bool failed  = false;
+static int tests = 0;
+static bool failed = false;
 
-static const char   *natsServerExe      = "nats-server";
-static bool          keepServerOutput    = false;
+static const char *natsServerExe = "nats-server";
+static bool keepServerOutput = false;
 
-#define NATS_INVALID_PID    (-1)
-#define LOGFILE_NAME        "server.log"
+#define NATS_INVALID_PID (-1)
+#define LOGFILE_NAME     "server.log"
 
-#define FAIL(m)                     \
-    {                               \
-        printf("@@ %s @@\n", (m));  \
-        failed = true;              \
-        return;                     \
+#define FAIL(m)                    \
+    {                              \
+        printf("@@ %s @@\n", (m)); \
+        failed = true;             \
+        return;                    \
     }
 
 #define CHECK_SERVER_STARTED(p)  \
     if ((p) == NATS_INVALID_PID) \
     FAIL("Unable to start or verify that the server was started!")
 
-#define test(s)         { printf("#%02d ", ++tests); printf("%s", (s)); fflush(stdout); }
-#define testCond(c)     if(c) { printf("\033[0;32mPASSED\033[0;0m\n"); fflush(stdout); } \
-                        else  { printf("\033[0;31mFAILED\033[0;0m\n"); fflush(stdout); failed=true; return; }
+#define test(s)                    \
+    {                              \
+        printf("#%02d ", ++tests); \
+        printf("%s", (s));         \
+        fflush(stdout);            \
+    }
+#define testCond(c)                            \
+    if (c)                                     \
+    {                                          \
+        printf("\033[0;32mPASSED\033[0;0m\n"); \
+        fflush(stdout);                        \
+    }                                          \
+    else                                       \
+    {                                          \
+        printf("\033[0;31mFAILED\033[0;0m\n"); \
+        fflush(stdout);                        \
+        failed = true;                         \
+        return;                                \
+    }
 
 // Server lifecycle — simplified from nats.c/test/test.h.
 //
@@ -114,12 +130,11 @@ _stopServer(natsPid pid)
 static natsStatus
 _checkStart(const char *url, int maxAttempts)
 {
-    natsConnection *nc  = NULL;
-    natsStatus      s   = NATS_OK;
-    int             attempts = 0;
+    natsConnection *nc = NULL;
+    natsStatus s = NATS_OK;
+    int attempts = 0;
 
-    while ((s = natsConnection_ConnectTo(&nc, url)) != NATS_OK
-           && attempts++ < maxAttempts)
+    while ((s = natsConnection_ConnectTo(&nc, url)) != NATS_OK && attempts++ < maxAttempts)
     {
         usleep(200 * 1000);
     }
@@ -142,7 +157,7 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
         // Child — build argv from "nats-server <cmdLineOpts> -a 127.0.0.1 [-l server.log]"
         char combined[2048];
         char *argvPtrs[64];
-        int   index = 0;
+        int index = 0;
 
         snprintf(combined, sizeof(combined), "%s%s%s -a 127.0.0.1%s",
                  natsServerExe,
@@ -190,8 +205,8 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
 static void
 _rmtree(const char *path)
 {
-    DIR           *dir;
-    struct stat    st;
+    DIR *dir;
+    struct stat st;
     struct dirent *entry;
 
     if (stat(path, &st) != 0)
@@ -238,34 +253,34 @@ _makeUniqueDir(char *buf, int bufLen, const char *prefix)
 //
 // JS_TEARDOWN cleans up all resources.
 
-#define JS_SETUP                                                            \
-natsStatus      s    = NATS_OK;                                             \
-natsConnection  *nc  = NULL;                                                \
-jsCtx           *js  = NULL;                                                \
-natsPid         pid  = NATS_INVALID_PID;                                    \
-char            datastore[256] = {'\0'};                                    \
-char            cmdLine[1024]  = {'\0'};                                    \
-                                                                            \
-_makeUniqueDir(datastore, sizeof(datastore), "datastore_");                 \
-test("Start JS Server: ");                                                  \
-snprintf(cmdLine, sizeof(cmdLine), "-js -sd %s", datastore);                \
-pid = _startServer("nats://127.0.0.1:4222", cmdLine, true);                \
-CHECK_SERVER_STARTED(pid);                                                  \
-testCond(true);                                                             \
-                                                                            \
-test("Connect: ");                                                          \
-s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");                \
-testCond(s == NATS_OK);                                                     \
-                                                                            \
-test("Get context: ");                                                      \
-s = natsConnection_JetStream(&js, nc, NULL);                                \
-testCond(s == NATS_OK);
+#define JS_SETUP                                                 \
+    natsStatus s = NATS_OK;                                      \
+    natsConnection *nc = NULL;                                   \
+    jsCtx *js = NULL;                                            \
+    natsPid pid = NATS_INVALID_PID;                              \
+    char datastore[256] = { '\0' };                              \
+    char cmdLine[1024] = { '\0' };                               \
+                                                                 \
+    _makeUniqueDir(datastore, sizeof(datastore), "datastore_");  \
+    test("Start JS Server: ");                                   \
+    snprintf(cmdLine, sizeof(cmdLine), "-js -sd %s", datastore); \
+    pid = _startServer("nats://127.0.0.1:4222", cmdLine, true);  \
+    CHECK_SERVER_STARTED(pid);                                   \
+    testCond(true);                                              \
+                                                                 \
+    test("Connect: ");                                           \
+    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");  \
+    testCond(s == NATS_OK);                                      \
+                                                                 \
+    test("Get context: ");                                       \
+    s = natsConnection_JetStream(&js, nc, NULL);                 \
+    testCond(s == NATS_OK);
 
-#define JS_TEARDOWN                     \
-jsCtx_Destroy(js);                      \
-natsConnection_Destroy(nc);             \
-_stopServer(pid);                       \
-_rmtree(datastore);
+#define JS_TEARDOWN             \
+    jsCtx_Destroy(js);          \
+    natsConnection_Destroy(nc); \
+    _stopServer(pid);           \
+    _rmtree(datastore);
 
 // Stream helper — creates a counter-ready stream for the given subject.
 
@@ -273,14 +288,14 @@ static natsStatus
 _createStream(jsCtx *js, const char *name, const char *subj)
 {
     jsStreamConfig cfg;
-    const char    *subjects[1];
+    const char *subjects[1];
 
     subjects[0] = subj;
     jsStreamConfig_Init(&cfg);
-    cfg.Name            = name;
-    cfg.Subjects        = subjects;
-    cfg.SubjectsLen     = 1;
-    cfg.AllowDirect     = true;
+    cfg.Name = name;
+    cfg.Subjects = subjects;
+    cfg.SubjectsLen = 1;
+    cfg.AllowDirect = true;
     cfg.AllowMsgCounter = true;
 
     return js_AddStream(NULL, js, &cfg, NULL, NULL);
@@ -293,12 +308,12 @@ _createStream(jsCtx *js, const char *name, const char *subj)
 void
 test_ParseValueValid(void)
 {
-    natsStatus     s;
-    char          *value = NULL;
+    natsStatus s;
+    char *value = NULL;
     const unsigned char body[] = "{\"val\":\"123\"}";
 
     test("Parse valid body: ");
-    s = natsCounterParser_ParseValue(body, sizeof(body)-1, &value);
+    s = natsCounterParser_ParseValue(body, sizeof(body) - 1, &value);
     testCond((s == NATS_OK) && (value != NULL) && (strcmp(value, "123") == 0));
     free(value);
 }
@@ -306,12 +321,12 @@ test_ParseValueValid(void)
 void
 test_ParseValueNegative(void)
 {
-    natsStatus     s;
-    char          *value = NULL;
+    natsStatus s;
+    char *value = NULL;
     const unsigned char body[] = "{\"val\":\"-456\"}";
 
     test("Parse negative value: ");
-    s = natsCounterParser_ParseValue(body, sizeof(body)-1, &value);
+    s = natsCounterParser_ParseValue(body, sizeof(body) - 1, &value);
     testCond((s == NATS_OK) && (value != NULL) && (strcmp(value, "-456") == 0));
     free(value);
 }
@@ -319,14 +334,13 @@ test_ParseValueNegative(void)
 void
 test_ParseValueLarge(void)
 {
-    natsStatus     s;
-    char          *value = NULL;
+    natsStatus s;
+    char *value = NULL;
     const unsigned char body[] = "{\"val\":\"999999999999999999999999999999\"}";
 
     test("Parse value larger than int64 range: ");
-    s = natsCounterParser_ParseValue(body, sizeof(body)-1, &value);
-    testCond((s == NATS_OK) && (value != NULL)
-             && (strcmp(value, "999999999999999999999999999999") == 0));
+    s = natsCounterParser_ParseValue(body, sizeof(body) - 1, &value);
+    testCond((s == NATS_OK) && (value != NULL) && (strcmp(value, "999999999999999999999999999999") == 0));
     free(value);
 }
 
@@ -334,7 +348,7 @@ void
 test_ParseValueEmpty(void)
 {
     natsStatus s;
-    char      *value = NULL;
+    char *value = NULL;
 
     test("Parse NULL data returns error: ");
     s = natsCounterParser_ParseValue(NULL, 0, &value);
@@ -344,24 +358,24 @@ test_ParseValueEmpty(void)
 void
 test_ParseValueInvalidJSON(void)
 {
-    natsStatus     s;
-    char          *value = NULL;
+    natsStatus s;
+    char *value = NULL;
     const unsigned char body[] = "not json";
 
     test("Parse invalid JSON returns error: ");
-    s = natsCounterParser_ParseValue(body, sizeof(body)-1, &value);
+    s = natsCounterParser_ParseValue(body, sizeof(body) - 1, &value);
     testCond(s == NATS_ERR);
 }
 
 void
 test_ParseValueInvalidNumber(void)
 {
-    natsStatus     s;
-    char          *value = NULL;
+    natsStatus s;
+    char *value = NULL;
     const unsigned char body[] = "{\"val\":\"not_a_number\"}";
 
     test("Parse non-numeric value returns error: ");
-    s = natsCounterParser_ParseValue(body, sizeof(body)-1, &value);
+    s = natsCounterParser_ParseValue(body, sizeof(body) - 1, &value);
     testCond(s == NATS_ERR);
 }
 
@@ -369,7 +383,7 @@ void
 test_ParsePubAckValue(void)
 {
     natsStatus s;
-    char      *value = NULL;
+    char *value = NULL;
 
     test("Parse PubAck value: ");
     s = natsCounterParser_ParsePubAckValue("42", &value);
@@ -381,7 +395,7 @@ void
 test_ParsePubAckValueNone(void)
 {
     natsStatus s;
-    char      *value = NULL;
+    char *value = NULL;
 
     test("Parse PubAck NULL returns NOT_FOUND: ");
     s = natsCounterParser_ParsePubAckValue(NULL, &value);
@@ -391,7 +405,7 @@ test_ParsePubAckValueNone(void)
 void
 test_ParseSourcesEmpty(void)
 {
-    natsStatus         s;
+    natsStatus s;
     natsCounterSource *sources = NULL;
 
     test("Parse NULL sources header returns empty list: ");
@@ -402,30 +416,25 @@ test_ParseSourcesEmpty(void)
 void
 test_ParseSourcesSingle(void)
 {
-    natsStatus         s;
+    natsStatus s;
     natsCounterSource *sources = NULL;
     const char *header = "{\"STREAM_A\":{\"subject.a\":\"100\"}}";
 
     test("Parse single source: ");
     s = natsCounterParser_ParseSources(header, &sources);
-    testCond((s == NATS_OK)
-             && (sources != NULL)
-             && (strcmp(sources->stream, "STREAM_A") == 0)
-             && (strcmp(sources->subject, "subject.a") == 0)
-             && (strcmp(sources->value, "100") == 0)
-             && (sources->next == NULL));
+    testCond((s == NATS_OK) && (sources != NULL) && (strcmp(sources->stream, "STREAM_A") == 0) && (strcmp(sources->subject, "subject.a") == 0) && (strcmp(sources->value, "100") == 0) && (sources->next == NULL));
     natsCounterParser_FreeSources(sources);
 }
 
 void
 test_ParseSourcesMultipleStreams(void)
 {
-    natsStatus         s;
+    natsStatus s;
     natsCounterSource *sources = NULL;
     const char *header = "{\"S1\":{\"sub1\":\"10\"},\"S2\":{\"sub2\":\"20\"}}";
-    int   count   = 0;
-    bool  foundS1 = false;
-    bool  foundS2 = false;
+    int count = 0;
+    bool foundS1 = false;
+    bool foundS2 = false;
 
     test("Parse multiple sources: ");
     s = natsCounterParser_ParseSources(header, &sources);
@@ -434,11 +443,9 @@ test_ParseSourcesMultipleStreams(void)
         for (natsCounterSource *n = sources; n != NULL; n = n->next)
         {
             count++;
-            if (strcmp(n->stream, "S1") == 0 && strcmp(n->subject, "sub1") == 0
-                && strcmp(n->value, "10") == 0)
+            if (strcmp(n->stream, "S1") == 0 && strcmp(n->subject, "sub1") == 0 && strcmp(n->value, "10") == 0)
                 foundS1 = true;
-            if (strcmp(n->stream, "S2") == 0 && strcmp(n->subject, "sub2") == 0
-                && strcmp(n->value, "20") == 0)
+            if (strcmp(n->stream, "S2") == 0 && strcmp(n->subject, "sub2") == 0 && strcmp(n->value, "20") == 0)
                 foundS2 = true;
         }
     }
@@ -450,7 +457,7 @@ void
 test_ParseIncrementPositive(void)
 {
     natsStatus s;
-    char      *incr = NULL;
+    char *incr = NULL;
 
     test("Parse positive increment: ");
     s = natsCounterParser_ParseIncrement("+42", &incr);
@@ -462,7 +469,7 @@ void
 test_ParseIncrementNegative(void)
 {
     natsStatus s;
-    char      *incr = NULL;
+    char *incr = NULL;
 
     test("Parse negative increment: ");
     s = natsCounterParser_ParseIncrement("-10", &incr);
@@ -474,7 +481,7 @@ void
 test_ParseIncrementAbsent(void)
 {
     natsStatus s;
-    char      *incr = NULL;
+    char *incr = NULL;
 
     test("Parse NULL increment returns NOT_FOUND: ");
     s = natsCounterParser_ParseIncrement(NULL, &incr);
@@ -485,7 +492,7 @@ void
 test_ParseIncrementInvalid(void)
 {
     natsStatus s;
-    char      *incr = NULL;
+    char *incr = NULL;
 
     test("Parse invalid increment returns error: ");
     s = natsCounterParser_ParseIncrement("not_a_number", &incr);
@@ -501,15 +508,15 @@ test_ParseIncrementInvalid(void)
 void
 test_CounterGetFromStreamDirectNotEnabled(void)
 {
-    natsStatus      s  = NATS_OK;
-    jsStreamConfig  cfg;
-    natsCounter    *c = NULL;
+    natsStatus s = NATS_OK;
+    jsStreamConfig cfg;
+    natsCounter *c = NULL;
 
-    natsConnection  *nc  = NULL;
-    jsCtx           *js  = NULL;
-    natsPid         pid  = NATS_INVALID_PID;
-    char            datastore[256] = {'\0'};
-    char            cmdLine[1024]  = {'\0'};
+    natsConnection *nc = NULL;
+    jsCtx *js = NULL;
+    natsPid pid = NATS_INVALID_PID;
+    char datastore[256] = { '\0' };
+    char cmdLine[1024] = { '\0' };
 
     _makeUniqueDir(datastore, sizeof(datastore), "datastore_");
     test("Start JS Server: ");
@@ -528,8 +535,8 @@ test_CounterGetFromStreamDirectNotEnabled(void)
 
     test("Create stream without AllowDirect: ");
     jsStreamConfig_Init(&cfg);
-    cfg.Name        = "NO_DIRECT";
-    cfg.Subjects    = (const char*[1]){"nd.>"};
+    cfg.Name = "NO_DIRECT";
+    cfg.Subjects = (const char *[1]){ "nd.>" };
     cfg.SubjectsLen = 1;
     cfg.AllowDirect = false;
     s = js_AddStream(NULL, js, &cfg, NULL, NULL);
@@ -545,15 +552,15 @@ test_CounterGetFromStreamDirectNotEnabled(void)
 void
 test_CounterGetFromStreamCounterNotEnabled(void)
 {
-    natsStatus      s  = NATS_OK;
-    jsStreamConfig  cfg;
-    natsCounter    *c = NULL;
+    natsStatus s = NATS_OK;
+    jsStreamConfig cfg;
+    natsCounter *c = NULL;
 
-    natsConnection  *nc  = NULL;
-    jsCtx           *js  = NULL;
-    natsPid         pid  = NATS_INVALID_PID;
-    char            datastore[256] = {'\0'};
-    char            cmdLine[1024]  = {'\0'};
+    natsConnection *nc = NULL;
+    jsCtx *js = NULL;
+    natsPid pid = NATS_INVALID_PID;
+    char datastore[256] = { '\0' };
+    char cmdLine[1024] = { '\0' };
 
     _makeUniqueDir(datastore, sizeof(datastore), "datastore_");
     test("Start JS Server: ");
@@ -572,10 +579,10 @@ test_CounterGetFromStreamCounterNotEnabled(void)
 
     test("Create stream without AllowMsgCounter: ");
     jsStreamConfig_Init(&cfg);
-    cfg.Name            = "NO_COUNTER";
-    cfg.Subjects        = (const char*[1]){"nc.>"};
-    cfg.SubjectsLen     = 1;
-    cfg.AllowDirect     = true;
+    cfg.Name = "NO_COUNTER";
+    cfg.Subjects = (const char *[1]){ "nc.>" };
+    cfg.SubjectsLen = 1;
+    cfg.AllowDirect = true;
     cfg.AllowMsgCounter = false;
     s = js_AddStream(NULL, js, &cfg, NULL, NULL);
     testCond(s == NATS_OK);
@@ -590,8 +597,8 @@ test_CounterGetFromStreamCounterNotEnabled(void)
 void
 test_CounterAddIncrementsValue(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -618,8 +625,8 @@ test_CounterAddIncrementsValue(void)
 void
 test_CounterAddNegativeDecrementsValue(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -646,8 +653,8 @@ test_CounterAddNegativeDecrementsValue(void)
 void
 test_CounterAddIntReturnsString(void)
 {
-    natsCounter *c   = NULL;
-    char        *val = NULL;
+    natsCounter *c = NULL;
+    char *val = NULL;
 
     JS_SETUP;
 
@@ -662,12 +669,14 @@ test_CounterAddIntReturnsString(void)
     test("AddInt 5 returns string \"5\": ");
     s = natsCounter_AddInt(c, "addint.x", 5, &val);
     testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "5") == 0));
-    free(val); val = NULL;
+    free(val);
+    val = NULL;
 
     test("AddInt 3 returns string \"8\": ");
     s = natsCounter_AddInt(c, "addint.x", 3, &val);
     testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "8") == 0));
-    free(val); val = NULL;
+    free(val);
+    val = NULL;
 
     test("AddInt -2 returns string \"6\": ");
     s = natsCounter_AddInt(c, "addint.x", -2, &val);
@@ -681,8 +690,8 @@ test_CounterAddIntReturnsString(void)
 void
 test_CounterIncrementByOne(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -705,8 +714,8 @@ test_CounterIncrementByOne(void)
 void
 test_CounterDecrementByOne(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -733,8 +742,8 @@ test_CounterDecrementByOne(void)
 void
 test_CounterLoadReturnsCurrentValue(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -762,9 +771,9 @@ test_CounterLoadReturnsCurrentValue(void)
 void
 test_CounterGetReturnsEntry(void)
 {
-    natsCounter      *c     = NULL;
+    natsCounter *c = NULL;
     natsCounterEntry *entry = NULL;
-    long long         val   = 0;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -795,7 +804,7 @@ test_CounterGetReturnsEntry(void)
 void
 test_CounterGetMissingSubject(void)
 {
-    natsCounter      *c     = NULL;
+    natsCounter *c = NULL;
     natsCounterEntry *entry = NULL;
 
     JS_SETUP;
@@ -819,8 +828,8 @@ test_CounterGetMissingSubject(void)
 void
 test_CounterGetMultipleBatch(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -834,14 +843,16 @@ test_CounterGetMultipleBatch(void)
 
     test("Populate 3 subjects: ");
     s = natsCounter_Add(c, "batch.a", 1, &val);
-    if (s == NATS_OK) s = natsCounter_Add(c, "batch.b", 2, &val);
-    if (s == NATS_OK) s = natsCounter_Add(c, "batch.c", 3, &val);
+    if (s == NATS_OK)
+        s = natsCounter_Add(c, "batch.b", 2, &val);
+    if (s == NATS_OK)
+        s = natsCounter_Add(c, "batch.c", 3, &val);
     testCond(s == NATS_OK);
 
     test("GetMultiple returns 3 entries: ");
     {
-        const char           *subjects[] = {"batch.a", "batch.b", "batch.c"};
-        natsCounterEntryList  list       = {0};
+        const char *subjects[] = { "batch.a", "batch.b", "batch.c" };
+        natsCounterEntryList list = { 0 };
         s = natsCounter_GetMultiple(&list, c, subjects, 3, 5000);
         testCond((s == NATS_OK) && (list.Count == 3)
                  && (list.Entries != NULL)
@@ -872,10 +883,9 @@ test_CounterGetMultipleEmpty(void)
 
     test("GetMultiple with 0 subjects returns empty list: ");
     {
-        natsCounterEntryList list = {0};
+        natsCounterEntryList list = { 0 };
         s = natsCounter_GetMultiple(&list, c, NULL, 0, 5000);
-        testCond((s == NATS_OK) && (list.Count == 0)
-                 && (list.Entries == NULL));
+        testCond((s == NATS_OK) && (list.Count == 0) && (list.Entries == NULL));
         natsCounterEntryList_Destroy(&list);
     }
 
@@ -886,8 +896,8 @@ test_CounterGetMultipleEmpty(void)
 void
 test_CounterGetMultipleSkipsMissing(void)
 {
-    natsCounter *c   = NULL;
-    long long    val = 0;
+    natsCounter *c = NULL;
+    long long val = 0;
 
     JS_SETUP;
 
@@ -905,8 +915,8 @@ test_CounterGetMultipleSkipsMissing(void)
 
     test("GetMultiple skips missing: ");
     {
-        const char           *subjects[] = {"bm.exists", "bm.missing"};
-        natsCounterEntryList  list       = {0};
+        const char *subjects[] = { "bm.exists", "bm.missing" };
+        natsCounterEntryList list = { 0 };
         s = natsCounter_GetMultiple(&list, c, subjects, 2, 5000);
         testCond((s == NATS_OK) && (list.Count == 1)
                  && (list.Entries != NULL)
@@ -926,6 +936,7 @@ typedef struct
     char  streams[8][64];
     char  subjects[8][64];
     char  values[8][64];
+
 } SourceTestCtx;
 
 static void
@@ -935,9 +946,9 @@ _sourceTestHandler(const char *stream, const char *subject, const char *value,
     SourceTestCtx *ctx = (SourceTestCtx *)closure;
     if (ctx->count < 8)
     {
-        snprintf(ctx->streams[ctx->count],  64, "%s", stream);
+        snprintf(ctx->streams[ctx->count], 64, "%s", stream);
         snprintf(ctx->subjects[ctx->count], 64, "%s", subject);
-        snprintf(ctx->values[ctx->count],   64, "%s", value);
+        snprintf(ctx->values[ctx->count], 64, "%s", value);
     }
     ctx->count++;
 }
@@ -945,14 +956,14 @@ _sourceTestHandler(const char *stream, const char *subject, const char *value,
 void
 test_CounterSourceTracking(void)
 {
-    natsCounter      *regional = NULL;
-    natsCounter      *global   = NULL;
-    natsCounterEntry *entry    = NULL;
-    long long         val      = 0;
-    SourceTestCtx     srcCtx   = {0};
-    jsStreamConfig    cfg;
-    jsStreamSource    src;
-    jsStreamSource   *srcArr[1];
+    natsCounter *regional = NULL;
+    natsCounter *global = NULL;
+    natsCounterEntry *entry = NULL;
+    long long val = 0;
+    SourceTestCtx srcCtx = { 0 };
+    jsStreamConfig cfg;
+    jsStreamSource src;
+    jsStreamSource *srcArr[1];
 
     JS_SETUP;
 
@@ -966,13 +977,13 @@ test_CounterSourceTracking(void)
     // causing the server to populate Nats-Counter-Sources.
     test("Create global stream sourcing from REGION_A: ");
     jsStreamConfig_Init(&cfg);
-    cfg.Name            = "GLOBAL";
-    cfg.AllowDirect     = true;
+    cfg.Name = "GLOBAL";
+    cfg.AllowDirect = true;
     cfg.AllowMsgCounter = true;
     jsStreamSource_Init(&src);
     src.Name = "REGION_A";
     srcArr[0] = &src;
-    cfg.Sources    = srcArr;
+    cfg.Sources = srcArr;
     cfg.SourcesLen = 1;
     s = js_AddStream(NULL, js, &cfg, NULL, NULL);
     testCond(s == NATS_OK);
@@ -1018,9 +1029,9 @@ test_CounterSourceTracking(void)
 void
 test_CounterAddStrAndLoadStr(void)
 {
-    natsCounter *c      = NULL;
-    char        *val    = NULL;
-    char        *loaded = NULL;
+    natsCounter *c = NULL;
+    char *val = NULL;
+    char *loaded = NULL;
 
     JS_SETUP;
 
@@ -1035,12 +1046,14 @@ test_CounterAddStrAndLoadStr(void)
     test("AddStr \"+100\" returns \"100\": ");
     s = natsCounter_AddStr(c, "strops.x", "+100", &val);
     testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "100") == 0));
-    free(val); val = NULL;
+    free(val);
+    val = NULL;
 
     test("AddStr \"-30\" returns \"70\": ");
     s = natsCounter_AddStr(c, "strops.x", "-30", &val);
     testCond((s == NATS_OK) && (val != NULL) && (strcmp(val, "70") == 0));
-    free(val); val = NULL;
+    free(val);
+    val = NULL;
 
     test("LoadStr returns \"70\": ");
     s = natsCounter_LoadStr(c, "strops.x", &loaded);
@@ -1054,9 +1067,9 @@ test_CounterAddStrAndLoadStr(void)
 void
 test_CounterLargeValueExceedsLongLong(void)
 {
-    natsCounter      *c     = NULL;
+    natsCounter *c = NULL;
     natsCounterEntry *entry = NULL;
-    char             *val   = NULL;
+    char *val = NULL;
     // A value larger than LLONG_MAX (9223372036854775807).
     const char *bigDelta = "+99999999999999999999999999999999";
 
@@ -1098,12 +1111,13 @@ test_CounterDestroyNull(void)
 // main — dispatch a single test by name (same as nats.c/test).
 //=============================================================================
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
     const char *envStr;
     const char *testName = NULL;
-    testFunc    f = NULL;
-    int         i;
+    testFunc f = NULL;
+    int i;
 
     if (argc != 2)
     {

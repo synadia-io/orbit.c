@@ -29,29 +29,32 @@
 #define STREAM_NAME "EVENTS"
 #define URL         "nats://localhost:4222"
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
-    natsStatus           s    = NATS_OK;
-    natsConnection      *nc   = NULL;
-    jsCtx               *js   = NULL;
-    jsStreamConfig       cfg;
-    jsBatchFetchOptions  opts;
-    natsMsgList          list = {0};
-    const char          *url  = (argc > 1) ? argv[1] : URL;
-    int                  i;
+    natsStatus s = NATS_OK;
+    natsConnection *nc = NULL;
+    jsCtx *js = NULL;
+    jsStreamConfig cfg;
+    jsBatchFetchOptions opts;
+    natsMsgList list = { 0 };
+    const char *url = (argc > 1) ? argv[1] : URL;
+    int i;
 
     printf("=== JetStream batch fetch example ===\n\n");
 
     s = natsConnection_ConnectTo(&nc, url);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     s = natsConnection_JetStream(&js, nc, NULL);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     // Create the stream with AllowDirect (idempotent — ignore "exists").
     jsStreamConfig_Init(&cfg);
-    cfg.Name        = STREAM_NAME;
-    cfg.Subjects    = (const char *[]){"events.>"};
+    cfg.Name = STREAM_NAME;
+    cfg.Subjects = (const char *[]){ "events.>" };
     cfg.SubjectsLen = 1;
     cfg.AllowDirect = true;
     js_AddStream(NULL, js, &cfg, NULL, NULL);
@@ -64,7 +67,8 @@ int main(int argc, char **argv)
         snprintf(subj, sizeof(subj), "events.user.%d", i);
         snprintf(body, sizeof(body), "payload-%d", i);
         s = js_Publish(NULL, js, subj, body, (int)strlen(body), NULL, NULL);
-        if (s != NATS_OK) goto done;
+        if (s != NATS_OK)
+            goto done;
     }
 
     // Fetch them all in a single batch.
@@ -73,29 +77,32 @@ int main(int argc, char **argv)
     opts.Batch = 100;
 
     s = jsBatchFetch_Fetch(&list, nc, STREAM_NAME, NULL, &opts, 5000, NULL);
-    if (s != NATS_OK) goto done;
+    if (s != NATS_OK)
+        goto done;
 
     printf("Received %d messages:\n", list.Count);
     for (i = 0; i < list.Count; i++)
     {
         const char *origSubj = NULL;
-        const char *seq      = NULL;
-        const char *data     = natsMsg_GetData(list.Msgs[i]);
-        int         dlen     = natsMsg_GetDataLength(list.Msgs[i]);
+        const char *seq = NULL;
+        const char *data = natsMsg_GetData(list.Msgs[i]);
+        int dlen = natsMsg_GetDataLength(list.Msgs[i]);
 
-        natsMsgHeader_Get(list.Msgs[i], JSSubject,  &origSubj);
+        natsMsgHeader_Get(list.Msgs[i], JSSubject, &origSubj);
         natsMsgHeader_Get(list.Msgs[i], JSSequence, &seq);
 
         printf("  seq=%-3s subject=%-22s data=%.*s\n",
-               seq      ? seq      : "?",
+               seq ? seq : "?",
                origSubj ? origSubj : "?",
                dlen, data ? data : "");
     }
 
 done:
     natsMsgList_Destroy(&list);
-    if (js != NULL) jsCtx_Destroy(js);
-    if (nc != NULL) natsConnection_Destroy(nc);
+    if (js != NULL)
+        jsCtx_Destroy(js);
+    if (nc != NULL)
+        natsConnection_Destroy(nc);
 
     if (s != NATS_OK)
     {

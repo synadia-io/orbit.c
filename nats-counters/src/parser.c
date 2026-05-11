@@ -68,7 +68,8 @@ _parseStr(const char *p, const char *end, char **out)
         if (*p == '\\')
         {
             p++;
-            if (p >= end) return NULL;
+            if (p >= end)
+                return NULL;
         }
         p++;
     }
@@ -98,7 +99,8 @@ _skipVal(const char *p, const char *end)
         p++;
         while (p < end && *p != '"')
         {
-            if (*p == '\\') p++;
+            if (*p == '\\')
+                p++;
             p++;
         }
         return (p < end) ? p + 1 : NULL;
@@ -112,12 +114,20 @@ _skipVal(const char *p, const char *end)
             if (*p == '"')
             {
                 p++;
-                while (p < end && *p != '"') { if (*p == '\\') p++; p++; }
-                if (p < end) p++;
+                while (p < end && *p != '"')
+                {
+                    if (*p == '\\')
+                        p++;
+                    p++;
+                }
+                if (p < end)
+                    p++;
                 continue;
             }
-            if (*p == '{') depth++;
-            else if (*p == '}') depth--;
+            if (*p == '{')
+                depth++;
+            else if (*p == '}')
+                depth--;
             p++;
         }
         return p;
@@ -131,19 +141,26 @@ _skipVal(const char *p, const char *end)
             if (*p == '"')
             {
                 p++;
-                while (p < end && *p != '"') { if (*p == '\\') p++; p++; }
-                if (p < end) p++;
+                while (p < end && *p != '"')
+                {
+                    if (*p == '\\')
+                        p++;
+                    p++;
+                }
+                if (p < end)
+                    p++;
                 continue;
             }
-            if (*p == '[') depth++;
-            else if (*p == ']') depth--;
+            if (*p == '[')
+                depth++;
+            else if (*p == ']')
+                depth--;
             p++;
         }
         return p;
     }
     // number, true, false, null — skip until delimiter
-    while (p < end && *p != ',' && *p != '}' && *p != ']'
-           && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+    while (p < end && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
         p++;
     return p;
 }
@@ -153,7 +170,7 @@ _skipVal(const char *p, const char *end)
 static natsStatus
 _jsonGetStr(const char *json, int jsonLen, const char *key, char **value)
 {
-    const char *p   = json;
+    const char *p = json;
     const char *end = json + jsonLen;
 
     p = _skipws(p, end);
@@ -164,17 +181,28 @@ _jsonGetStr(const char *json, int jsonLen, const char *key, char **value)
     while (p < end)
     {
         p = _skipws(p, end);
-        if (p >= end) break;
-        if (*p == '}') return NATS_NOT_FOUND;
-        if (*p == ',') { p++; continue; }
+        if (p >= end)
+            break;
+        if (*p == '}')
+            return NATS_NOT_FOUND;
+        if (*p == ',')
+        {
+            p++;
+            continue;
+        }
 
         // Parse field key
         char *k = NULL;
         p = _parseStr(p, end, &k);
-        if (p == NULL) return NATS_ERR;
+        if (p == NULL)
+            return NATS_ERR;
 
         p = _skipws(p, end);
-        if (p >= end || *p != ':') { free(k); return NATS_ERR; }
+        if (p >= end || *p != ':')
+        {
+            free(k);
+            return NATS_ERR;
+        }
         p++;
         p = _skipws(p, end);
 
@@ -191,7 +219,8 @@ _jsonGetStr(const char *json, int jsonLen, const char *key, char **value)
 
         // Skip the value
         p = _skipVal(p, end);
-        if (p == NULL) return NATS_ERR;
+        if (p == NULL)
+            return NATS_ERR;
     }
     return NATS_NOT_FOUND;
 }
@@ -201,7 +230,7 @@ _jsonGetStr(const char *json, int jsonLen, const char *key, char **value)
 static natsStatus
 _parseNestedObj(const char *json, int jsonLen, natsCounterSource **head)
 {
-    const char *p   = json;
+    const char *p = json;
     const char *end = json + jsonLen;
 
     p = _skipws(p, end);
@@ -212,61 +241,107 @@ _parseNestedObj(const char *json, int jsonLen, natsCounterSource **head)
     while (p < end)
     {
         p = _skipws(p, end);
-        if (p >= end) break;
-        if (*p == '}') return NATS_OK;
-        if (*p == ',') { p++; continue; }
+        if (p >= end)
+            break;
+        if (*p == '}')
+            return NATS_OK;
+        if (*p == ',')
+        {
+            p++;
+            continue;
+        }
 
         // Outer key (stream name)
         char *stream = NULL;
         p = _parseStr(p, end, &stream);
-        if (p == NULL) return NATS_ERR;
+        if (p == NULL)
+            return NATS_ERR;
 
         p = _skipws(p, end);
-        if (p >= end || *p != ':') { free(stream); return NATS_ERR; }
+        if (p >= end || *p != ':')
+        {
+            free(stream);
+            return NATS_ERR;
+        }
         p++;
         p = _skipws(p, end);
 
         // Inner object
-        if (p >= end || *p != '{') { free(stream); return NATS_ERR; }
+        if (p >= end || *p != '{')
+        {
+            free(stream);
+            return NATS_ERR;
+        }
         p++;
 
         while (p < end)
         {
             p = _skipws(p, end);
-            if (p >= end) { free(stream); return NATS_ERR; }
-            if (*p == '}') { p++; break; }
-            if (*p == ',') { p++; continue; }
+            if (p >= end)
+            {
+                free(stream);
+                return NATS_ERR;
+            }
+            if (*p == '}')
+            {
+                p++;
+                break;
+            }
+            if (*p == ',')
+            {
+                p++;
+                continue;
+            }
 
             // Inner key (subject)
             char *subject = NULL;
             p = _parseStr(p, end, &subject);
-            if (p == NULL) { free(stream); return NATS_ERR; }
+            if (p == NULL)
+            {
+                free(stream);
+                return NATS_ERR;
+            }
 
             p = _skipws(p, end);
-            if (p >= end || *p != ':') { free(stream); free(subject); return NATS_ERR; }
+            if (p >= end || *p != ':')
+            {
+                free(stream);
+                free(subject);
+                return NATS_ERR;
+            }
             p++;
             p = _skipws(p, end);
 
             // Inner value (counter value string)
             char *val = NULL;
             p = _parseStr(p, end, &val);
-            if (p == NULL) { free(stream); free(subject); return NATS_ERR; }
+            if (p == NULL)
+            {
+                free(stream);
+                free(subject);
+                return NATS_ERR;
+            }
 
             natsCounterSource *node = (natsCounterSource *)calloc(1, sizeof(*node));
             if (node == NULL)
             {
-                free(stream); free(subject); free(val);
+                free(stream);
+                free(subject);
+                free(val);
                 return NATS_NO_MEMORY;
             }
             node->stream = strdup(stream);
             if (node->stream == NULL)
             {
-                free(stream); free(subject); free(val); free(node);
+                free(stream);
+                free(subject);
+                free(val);
+                free(node);
                 return NATS_NO_MEMORY;
             }
             node->subject = subject;
-            node->value   = val;
-            node->next    = *head;
+            node->value = val;
+            node->next = *head;
             *head = node;
         }
         free(stream);
@@ -278,11 +353,10 @@ _parseNestedObj(const char *json, int jsonLen, natsCounterSource **head)
 // Expected body format: {"val":"<decimal>"}
 natsStatus
 natsCounterParser_ParseValue(const unsigned char *data,
-                              int                  dataLen,
-                              char               **value)
+                             int dataLen, char **value)
 {
     natsStatus s;
-    char      *val = NULL;
+    char *val = NULL;
 
     if (data == NULL || dataLen <= 0 || value == NULL)
         return NATS_ERR;
@@ -302,8 +376,8 @@ natsCounterParser_ParseValue(const unsigned char *data,
 }
 
 natsStatus
-natsCounterParser_ParsePubAckValue(const char  *ackVal,
-                                    char       **value)
+natsCounterParser_ParsePubAckValue(const char *ackVal,
+                                   char **value)
 {
     if (ackVal == NULL)
         return NATS_NOT_FOUND;
@@ -319,8 +393,8 @@ natsCounterParser_ParsePubAckValue(const char  *ackVal,
 // Expected header format (JSON):
 //   {"STREAM_A":{"subject.a":"100"},"STREAM_B":{"subject.b":"200"}}
 natsStatus
-natsCounterParser_ParseSources(const char         *headerValue,
-                                natsCounterSource **sources)
+natsCounterParser_ParseSources(const char *headerValue,
+                               natsCounterSource **sources)
 {
     *sources = NULL;
 
@@ -347,8 +421,8 @@ natsCounterParser_FreeSources(natsCounterSource *sources)
 }
 
 natsStatus
-natsCounterParser_ParseIncrement(const char  *headerValue,
-                                  char       **increment)
+natsCounterParser_ParseIncrement(const char *headerValue,
+                                 char **increment)
 {
     if (headerValue == NULL)
         return NATS_NOT_FOUND;

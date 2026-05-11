@@ -18,7 +18,7 @@
 
 #ifdef _TEST_LIST
 #undef _test
-#define _test(name) {#name, test_##name},
+#define _test(name) { #name, test_##name },
 #endif
 
 #include "list_test.txt"

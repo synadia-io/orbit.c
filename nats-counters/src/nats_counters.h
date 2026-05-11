@@ -19,7 +19,8 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /** \defgroup NatsCounters NATS Counters
@@ -65,7 +66,8 @@ struct natsCounterSource;
  * Includes its value, last increment, and source-tracking state.
  * Obtain from #natsCounter_Get(); destroy with #natsCounterEntry_Destroy().
  */
-typedef struct __natsCounterEntry {
+typedef struct __natsCounterEntry
+{
   char *subject;                     ///< Stream subject.
   char *value;                       ///< Decimal string, arbitrary precision.
   char *increment;                   ///< Decimal string; NULL if header absent.
@@ -77,9 +79,11 @@ typedef struct __natsCounterEntry {
  *
  * Used by some APIs which return a list of #natsCounterEntry objects.
  */
-typedef struct __natsCounterEntryList {
+typedef struct __natsCounterEntryList
+{
     natsCounterEntry **Entries;
-    int Count;
+    int              Count;
+
 } natsCounterEntryList;
 
 /** @} */ // end counterTypesGroup
@@ -134,10 +138,9 @@ typedef void (*natsCounterSourceIterFn)(const char *stream, const char *subject,
  * @return #NATS_OK on success, #NATS_INVALID_CONFIG if a
  * required stream flag is absent.
  */
-NATS_EXTERN natsStatus natsCounter_GetFromStream(natsCounter **counter,
-                                                 jsCtx *js,
-                                                 natsConnection *nc,
-                                                 const char *stream);
+NATS_EXTERN natsStatus
+natsCounter_GetFromStream(natsCounter **counter, jsCtx *js,
+                          natsConnection *nc, const char *stream);
 
 /** \brief Releases all resources owned by `counter`.
  *
@@ -145,7 +148,8 @@ NATS_EXTERN natsStatus natsCounter_GetFromStream(natsCounter **counter,
  *
  * @param counter the counter to destroy, or `NULL`.
  */
-NATS_EXTERN void natsCounter_Destroy(natsCounter *counter);
+NATS_EXTERN void
+natsCounter_Destroy(natsCounter *counter);
 
 /** @} */ // end counterLifecycleGroup
 
@@ -168,9 +172,9 @@ NATS_EXTERN void natsCounter_Destroy(natsCounter *counter);
  * @return #NATS_OK on success, #NATS_ERR if the
  * resulting value exceeds `long long`.
  */
-NATS_EXTERN natsStatus natsCounter_Add(natsCounter *counter,
-                                       const char *subject, long long delta,
-                                       long long *newValue);
+NATS_EXTERN natsStatus
+natsCounter_Add(natsCounter *counter, const char *subject,
+                long long delta, long long *newValue);
 
 /** \brief Adds `delta` to the counter for `subject`, returning the result as
  * an arbitrary-precision decimal string.
@@ -185,9 +189,9 @@ NATS_EXTERN natsStatus natsCounter_Add(natsCounter *counter,
  * @param newValue receives a newly allocated string; caller must `free()`.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounter_AddInt(natsCounter *counter,
-                                          const char *subject, long long delta,
-                                          char **newValue);
+NATS_EXTERN natsStatus
+natsCounter_AddInt(natsCounter *counter, const char *subject,
+                   long long delta, char **newValue);
 
 /** \brief Adds 1 to the counter for `subject`.
  *
@@ -196,9 +200,8 @@ NATS_EXTERN natsStatus natsCounter_AddInt(natsCounter *counter,
  * @param newValue receives the resulting total.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounter_Increment(natsCounter *counter,
-                                             const char *subject,
-                                             long long *newValue);
+NATS_EXTERN natsStatus
+natsCounter_Increment(natsCounter *counter, const char *subject, long long *newValue);
 
 /** \brief Subtracts 1 from the counter for `subject`.
  *
@@ -207,9 +210,8 @@ NATS_EXTERN natsStatus natsCounter_Increment(natsCounter *counter,
  * @param newValue receives the resulting total.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounter_Decrement(natsCounter *counter,
-                                             const char *subject,
-                                             long long *newValue);
+NATS_EXTERN natsStatus
+natsCounter_Decrement(natsCounter *counter, const char *subject, long long *newValue);
 
 /** \brief Reads the current total for `subject` without modifying it.
  *
@@ -220,8 +222,8 @@ NATS_EXTERN natsStatus natsCounter_Decrement(natsCounter *counter,
  * @return #NATS_OK on success, #NATS_ERR if the
  * value exceeds `long long`.
  */
-NATS_EXTERN natsStatus natsCounter_Load(natsCounter *counter,
-                                        const char *subject, long long *value);
+NATS_EXTERN natsStatus
+natsCounter_Load(natsCounter *counter, const char *subject, long long *value);
 
 /** @} */ // end counterIntGroup
 
@@ -245,9 +247,9 @@ NATS_EXTERN natsStatus natsCounter_Load(natsCounter *counter,
  * @param newValue receives a newly allocated string; caller must `free()`.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounter_AddStr(natsCounter *counter,
-                                          const char *subject,
-                                          const char *delta, char **newValue);
+NATS_EXTERN natsStatus
+natsCounter_AddStr(natsCounter *counter, const char *subject,
+                   const char *delta, char **newValue);
 
 /** \brief Reads the current total as a decimal string.
  *
@@ -258,8 +260,8 @@ NATS_EXTERN natsStatus natsCounter_AddStr(natsCounter *counter,
  * @param value receives a newly allocated string; caller must `free()`.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounter_LoadStr(natsCounter *counter,
-                                           const char *subject, char **value);
+NATS_EXTERN natsStatus
+natsCounter_LoadStr(natsCounter *counter, const char *subject, char **value);
 
 /** @} */ // end counterStrGroup
 
@@ -283,9 +285,8 @@ NATS_EXTERN natsStatus natsCounter_LoadStr(natsCounter *counter,
  * @return #NATS_OK on success, #NATS_NOT_FOUND if the
  * subject has never been written.
  */
-NATS_EXTERN natsStatus natsCounter_Get(natsCounter *counter,
-                                       const char *subject,
-                                       natsCounterEntry **entry);
+NATS_EXTERN natsStatus
+natsCounter_Get(natsCounter *counter, const char *subject, natsCounterEntry **entry);
 
 /** \brief Fetches counter entries for multiple subjects in a single batch.
  *
@@ -315,11 +316,8 @@ NATS_EXTERN natsStatus natsCounter_Get(natsCounter *counter,
  * #NATS_TIMEOUT if `timeout` elapsed before the batch completed.
  */
 NATS_EXTERN natsStatus
-natsCounter_GetMultiple(natsCounterEntryList  *outList,
-                        natsCounter           *counter,
-                        const char            **subjects,
-                        int                   numSubjects,
-                        uint64_t              timeout);
+natsCounter_GetMultiple(natsCounterEntryList *outList, natsCounter *counter,
+                        const char **subjects, int numSubjects, uint64_t timeout);
 
 /** \brief Returns `true` when the fetched message carries a Nats-Incr header.
  *
@@ -328,7 +326,8 @@ natsCounter_GetMultiple(natsCounterEntryList  *outList,
  * @param entry the entry.
  * @return `true` if an increment is present.
  */
-NATS_EXTERN bool natsCounterEntry_HasIncrement(natsCounterEntry *entry);
+NATS_EXTERN bool
+natsCounterEntry_HasIncrement(natsCounterEntry *entry);
 
 /** \brief Returns `true` when the entry carries a Nats-Counter-Sources header.
  *
@@ -337,7 +336,8 @@ NATS_EXTERN bool natsCounterEntry_HasIncrement(natsCounterEntry *entry);
  * @param entry the entry.
  * @return `true` if sources are present.
  */
-NATS_EXTERN bool natsCounterEntry_HasSources(natsCounterEntry *entry);
+NATS_EXTERN bool
+natsCounterEntry_HasSources(natsCounterEntry *entry);
 
 /** \brief Iterates over each per-source contribution in the entry.
  *
@@ -349,9 +349,10 @@ NATS_EXTERN bool natsCounterEntry_HasSources(natsCounterEntry *entry);
  * @param closure user-supplied pointer forwarded to `fn`.
  * @return #NATS_OK on success.
  */
-NATS_EXTERN natsStatus natsCounterEntry_IterSources(natsCounterEntry *entry,
-                                                    natsCounterSourceIterFn fn,
-                                                    void *closure);
+NATS_EXTERN natsStatus
+natsCounterEntry_IterSources(natsCounterEntry *entry,
+                             natsCounterSourceIterFn fn,
+                             void *closure);
 
 /** \brief Releases all resources owned by `entry`.
  *
