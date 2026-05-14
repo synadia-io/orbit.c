@@ -1,0 +1,36 @@
+Compiled Object files, Static and Dynamic libs (Shared Objects)
+*.o
+*.a
+*.so
+*.dylib
+*.gcov
+
+# Folders
+build*/
+cmake-build*/
+install/
+html/
+!doc/html/
+*/test/datastore_*/
+*/test/conf_*
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Eclipse
+.cproject
+.project
+.settings/
+
+.vscode/
+.idea/
+.vs/
+out/
+.cache/
+.claude
+compile_commands.json
+
+# Mac
+.DS_Store
