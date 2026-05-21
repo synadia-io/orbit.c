@@ -21,6 +21,7 @@
 //   ctest --test-dir build
 
 #include "batch_fetch.h"
+#include "fast_publish.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -277,6 +278,22 @@ static natsStatus
 _publish(jsCtx *js, const char *subj, const char *body)
 {
     return js_Publish(NULL, js, subj, body, (int)strlen(body), NULL, NULL);
+}
+
+static natsStatus
+_createBatchStream(jsCtx *js, const char *name, const char *subj)
+{
+    jsStreamConfig cfg;
+    const char *subjects[1];
+
+    subjects[0] = subj;
+    jsStreamConfig_Init(&cfg);
+    cfg.Name = name;
+    cfg.Subjects = subjects;
+    cfg.SubjectsLen = 1;
+    cfg.AllowBatched = true; // enables fast batch publishing
+
+    return js_AddStream(NULL, js, &cfg, NULL, NULL);
 }
 
 //=============================================================================
@@ -755,6 +772,245 @@ test_BatchFetchUnsupportedStream(void)
     testCond((s != NATS_OK) || (list.Count == 0));
 
     natsMsgList_Destroy(&list);
+    JS_TEARDOWN;
+}
+
+//=============================================================================
+// Fast publish — validation tests, no server needed.
+//=============================================================================
+
+void
+test_FastPublishOptionsInit(void)
+{
+    jsFastPublisherOptions opts;
+    natsStatus s;
+
+    test("Init returns NATS_INVALID_ARG for NULL: ");
+    s = jsFastPublisherOptions_Init(NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("Init zeros all fields: ");
+    memset(&opts, 0xff, sizeof(opts));
+    s = jsFastPublisherOptions_Init(&opts);
+    testCond((s == NATS_OK)
+             && (opts.Flow == 0)
+             && (opts.MaxOutstandingAcks == 0)
+             && (opts.AckTimeout == 0)
+             && (opts.ContinueOnGap == false)
+             && (opts.ErrHandler == NULL)
+             && (opts.ErrHandlerClosure == NULL));
+}
+
+void
+test_FastPublishBatchMsgOptsInit(void)
+{
+    jsBatchMsgOpts opts;
+    natsStatus s;
+
+    test("Init returns NATS_INVALID_ARG for NULL: ");
+    s = jsBatchMsgOpts_Init(NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("Init zeros all fields: ");
+    memset(&opts, 0xff, sizeof(opts));
+    s = jsBatchMsgOpts_Init(&opts);
+    testCond((s == NATS_OK)
+             && (opts.TTL == 0)
+             && (opts.ExpectedStream == NULL)
+             && (opts.ExpectedLastSubject == NULL)
+             && (opts.ExpectedLastSubjSeq == 0)
+             && (opts.HasExpectedLastSubjSeq == false)
+             && (opts.ExpectedLastSeq == 0)
+             && (opts.HasExpectedLastSeq == false));
+}
+
+void
+test_FastPublishCreateValidation(void)
+{
+    jsFastPublishCtx *ctx = NULL;
+    jsCtx *js = (jsCtx *)0x1; // Create only stores js, never dereferences it
+    natsStatus s;
+
+    test("NULL out-param rejected: ");
+    s = jsFastPublishCtx_Create(NULL, js, NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("NULL js rejected: ");
+    s = jsFastPublishCtx_Create(&ctx, NULL, NULL);
+    testCond((s == NATS_INVALID_ARG) && (ctx == NULL));
+}
+
+void
+test_FastPublishAddValidation(void)
+{
+    jsFastPublishCtx *fakeCtx = (jsFastPublishCtx *)0x1; // never dereferenced
+    natsConnection *fakeNc = (natsConnection *)0x1;
+    natsStatus s;
+
+    test("Add NULL ctx rejected: ");
+    s = jsFastPublish_Add(NULL, NULL, fakeNc, "s", "d", 1, NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("Add NULL connection rejected: ");
+    s = jsFastPublish_Add(NULL, fakeCtx, NULL, "s", "d", 1, NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("Add NULL subject rejected: ");
+    s = jsFastPublish_Add(NULL, fakeCtx, fakeNc, NULL, "d", 1, NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("AddMsg NULL ctx rejected: ");
+    s = jsFastPublish_AddMsg(NULL, NULL, (natsMsg *)0x1, NULL);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("AddMsg NULL msg rejected: ");
+    s = jsFastPublish_AddMsg(NULL, fakeCtx, NULL, NULL);
+    testCond(s == NATS_INVALID_ARG);
+}
+
+void
+test_FastPublishCommitValidation(void)
+{
+    jsFastPublishCtx *fakeCtx = (jsFastPublishCtx *)0x1; // never dereferenced
+    natsMsg *fakeMsg = (natsMsg *)0x1;
+    natsStatus s;
+
+    test("Commit NULL ctx rejected: ");
+    s = jsFastPublish_Commit(NULL, NULL, "s", "d", 1, NULL, 1000);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("Commit NULL subject rejected: ");
+    s = jsFastPublish_Commit(NULL, fakeCtx, NULL, "d", 1, NULL, 1000);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("CommitMsg NULL ctx rejected: ");
+    s = jsFastPublish_CommitMsg(NULL, NULL, fakeMsg, NULL, 1000);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("CommitMsg NULL msg rejected: ");
+    s = jsFastPublish_CommitMsg(NULL, fakeCtx, NULL, NULL, 1000);
+    testCond(s == NATS_INVALID_ARG);
+
+    test("Close NULL ctx rejected: ");
+    s = jsFastPublish_Close(NULL, NULL, 1000);
+    testCond(s == NATS_INVALID_ARG);
+}
+
+void
+test_FastPublishLifecycleNoServer(void)
+{
+    jsFastPublishCtx *ctx = NULL;
+    jsCtx *js = (jsCtx *)0x1; // Create only stores js, never dereferences it
+    natsMsg *msg = NULL;
+    natsStatus s;
+
+    test("IsClosed(NULL) returns true: ");
+    testCond(jsFastPublish_IsClosed(NULL) == true);
+
+    test("Destroy(NULL) is a no-op: ");
+    jsFastPublish_Destroy(NULL);
+    testCond(true);
+
+    test("Create succeeds with default options: ");
+    s = jsFastPublishCtx_Create(&ctx, js, NULL);
+    testCond((s == NATS_OK) && (ctx != NULL));
+
+    test("Fresh batch reports not closed: ");
+    testCond(jsFastPublish_IsClosed(ctx) == false);
+
+    test("AddMsg before first Add is rejected (no connection): ");
+    s = natsMsg_Create(&msg, "test.x", NULL, "hi", 2);
+    if (s == NATS_OK)
+        s = jsFastPublish_AddMsg(NULL, ctx, msg, NULL);
+    testCond(s == NATS_INVALID_ARG);
+    natsMsg_Destroy(msg);
+
+    test("Close on an empty batch returns NATS_ERR: ");
+    s = jsFastPublish_Close(NULL, ctx, 1000);
+    testCond(s == NATS_ERR);
+
+    jsFastPublish_Destroy(ctx);
+}
+
+//=============================================================================
+// Fast publish — integration tests, require a nats-server.
+//=============================================================================
+
+void
+test_FastPublishHappyPath(void)
+{
+    jsFastPublishCtx *fp = NULL;
+    jsFastPubAck fpAck = { 0 };
+    jsPubAck *pubAck = NULL;
+    natsMsg *msg = NULL;
+
+    JS_SETUP;
+
+    test("Create batch-publish stream: ");
+    s = _createBatchStream(js, "FAST", "fast.>");
+    testCond(s == NATS_OK);
+
+    test("Create fast publisher: ");
+    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    testCond((s == NATS_OK) && (fp != NULL));
+
+    test("Add first message: ");
+    s = jsFastPublish_Add(&fpAck, fp, nc, "fast.1", "message 1", 9, NULL);
+    testCond((s == NATS_OK) && (fpAck.BatchSequence == 1));
+
+    test("AddMsg second message: ");
+    s = natsMsg_Create(&msg, "fast.2", NULL, "message 2", 9);
+    if (s == NATS_OK)
+        s = jsFastPublish_AddMsg(&fpAck, fp, msg, NULL);
+    testCond((s == NATS_OK) && (fpAck.BatchSequence == 2));
+    natsMsg_Destroy(msg);
+
+    test("Commit batch with final message: ");
+    s = jsFastPublish_Commit(&pubAck, fp, "fast.3", "message 3", 9, NULL, 5000);
+    testCond((s == NATS_OK)
+             && (pubAck != NULL)
+             && (pubAck->Stream != NULL)
+             && (strcmp(pubAck->Stream, "FAST") == 0));
+    jsPubAck_Destroy(pubAck);
+
+    test("Batch reports closed after commit: ");
+    testCond(jsFastPublish_IsClosed(fp) == true);
+
+    test("Add after commit is rejected: ");
+    s = jsFastPublish_Add(NULL, fp, nc, "fast.4", "message 4", 9, NULL);
+    testCond(s == NATS_ERR);
+
+    jsFastPublish_Destroy(fp);
+    JS_TEARDOWN;
+}
+
+void
+test_FastPublishCloseEndsBatch(void)
+{
+    jsFastPublishCtx *fp = NULL;
+
+    JS_SETUP;
+
+    test("Create batch-publish stream: ");
+    s = _createBatchStream(js, "FASTC", "fastc.>");
+    testCond(s == NATS_OK);
+
+    test("Create fast publisher: ");
+    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    testCond((s == NATS_OK) && (fp != NULL));
+
+    test("Add a message: ");
+    s = jsFastPublish_Add(NULL, fp, nc, "fastc.1", "only", 4, NULL);
+    testCond(s == NATS_OK);
+
+    test("Close commits the batch without a final message: ");
+    s = jsFastPublish_Close(NULL, fp, 5000);
+    testCond(s == NATS_OK);
+
+    test("Batch reports closed after Close: ");
+    testCond(jsFastPublish_IsClosed(fp) == true);
+
+    jsFastPublish_Destroy(fp);
     JS_TEARDOWN;
 }
 
