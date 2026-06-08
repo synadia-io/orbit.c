@@ -165,9 +165,9 @@ typedef struct jsFastPublisherOptions
     /** \brief Total wall-clock timeout, in milliseconds, applied to any
      * single stall.
      *
-     * 0 = inherit the JetStream context's default request timeout. The
-     * deadline is shared across re-stall cycles within a single Add
-     * call; it is not a per-ack budget.
+     * 0 = use the built-in default of 5000 ms. The deadline is shared
+     * across re-stall cycles within a single Add call; it is not a
+     * per-ack budget.
      */
     int64_t  AckTimeout;
 
@@ -211,7 +211,7 @@ jsBatchMsgOpts_Init(jsBatchMsgOpts *opts);
 /** \brief Initialises a #jsFastPublisherOptions to its defaults.
  *
  * Zeros every field. The library substitutes the documented defaults
- * (Flow = 100, MaxOutstandingAcks = 2, AckTimeout = inherit) for any
+ * (Flow = 100, MaxOutstandingAcks = 2, AckTimeout = 5000 ms) for any
  * field left at zero when the options struct is passed to
  * #jsFastPublishCtx_Create.
  *
@@ -381,10 +381,14 @@ jsFastPublish_IsClosed(jsFastPublishCtx *ctx);
 
 /** \brief Releases all resources owned by `ctx`.
  *
- * If the batch has not yet been closed the library issues a best-effort
- * close on the wire before freeing memory; any resulting commit ack is
- * discarded. Safe to call on a context that has already been committed
- * or closed. Passing `NULL` is a no-op.
+ * Tears down the ack subscription and frees memory. Safe to call on a
+ * context that has already been committed or closed. Passing `NULL` is a
+ * no-op.
+ *
+ * Destroying a context whose batch is still open does NOT send a commit
+ * or end-of-batch marker on the wire; the in-progress batch is simply
+ * abandoned. To seal a batch, call #jsFastPublish_Commit,
+ * #jsFastPublish_CommitMsg, or #jsFastPublish_Close before destroying.
  *
  * @param ctx the context to destroy, or `NULL`.
  */
