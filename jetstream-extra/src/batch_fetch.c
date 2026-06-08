@@ -14,6 +14,7 @@
 #include "batch_fetch.h"
 
 #include "buf.h"
+#include "os_shims.h" // nats_gmtime + public nats time API
 
 #include <stdlib.h>
 #include <string.h>
@@ -130,7 +131,7 @@ _jsonAppendTimeRFC3339(natsBuffer *b, uint64_t nsec)
     char tmp[48];
     int n;
 
-    if (gmtime_r(&secs, &tm) == NULL)
+    if (!nats_gmtime(&secs, &tm))
         return NATS_ERR;
 
     n = snprintf(tmp, sizeof(tmp),
@@ -420,9 +421,9 @@ _kindToStatus(_msgKind k, jsErrCode *errCodeOut)
 static int64_t
 _nowMs(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ((int64_t)ts.tv_sec * 1000) + (int64_t)(ts.tv_nsec / 1000000);
+    // Public, cross-platform monotonic clock (QueryPerformanceCounter on
+    // Windows, clock_gettime(CLOCK_MONOTONIC) on POSIX).
+    return nats_NowMonotonicInNanoSeconds() / 1000000;
 }
 
 // Common request setup — build subject + body, create inbox.

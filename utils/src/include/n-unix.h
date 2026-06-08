@@ -18,52 +18,17 @@
 #define _GNU_SOURCE
 #endif
 
-#if defined(__arm__) || defined(__aarch64__)
-#include <sys/socket.h>
-#endif
-
 #include <stdint.h>
 #include <stdbool.h>
-
-#include <sys/time.h>
-#include <fcntl.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
 #include <pthread.h>
-#include <unistd.h>
-#include <signal.h>
-#include <sys/wait.h>
 #include <errno.h>
-#include <string.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <poll.h>
+#include <time.h>
 
-typedef pthread_t       natsThread;
-typedef pthread_key_t   natsThreadLocal;
 typedef pthread_mutex_t natsMutex;
 typedef pthread_cond_t  natsCondition;
-typedef pthread_once_t  natsInitOnceType;
-typedef socklen_t       natsSockLen;
-typedef size_t          natsRecvLen;
 
-#define NATS_ONCE_STATIC_INIT   PTHREAD_ONCE_INIT
-
-#define NATS_SOCK_INVALID               (-1)
-#define NATS_SOCK_SHUTDOWN(s)           (shutdown((s), SHUT_RDWR))
-#define NATS_SOCK_CLOSE(s)              (close((s)))
-#define NATS_SOCK_CONNECT_IN_PROGRESS   (EINPROGRESS)
-#define NATS_SOCK_WOULD_BLOCK           (EWOULDBLOCK)
-#define NATS_SOCK_ERROR                 (-1)
-#define NATS_SOCK_GET_ERROR             (errno)
-
-#define __NATS_FUNCTION__ __func__
-
-#define nats_asprintf       asprintf
-#define nats_strcasestr     strcasestr
-#define nats_vsnprintf      vsnprintf
-#define nats_strtok         strtok_r
-
-#define nats_vscprintf(f, a) vsnprintf(NULL, 0, (f), (a))
+// Fills *(tm) from *(secs) (UTC); evaluates to true on success. Mirrors the
+// Windows gmtime_s shim in n-win.h, which has reversed arguments.
+#define nats_gmtime(secs, tm)   (gmtime_r((secs), (tm)) != NULL)
 
 #endif /* N_UNIX_H_ */

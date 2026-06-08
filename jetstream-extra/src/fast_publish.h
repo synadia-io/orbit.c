@@ -275,16 +275,18 @@ jsFastPublish_Add(jsFastPubAck *ack, jsFastPublishCtx *ctx, natsConnection *nc,
 /** \brief Adds a pre-built #natsMsg to the current batch.
  *
  * Behaves identically to #jsFastPublish_Add but accepts a fully formed
- * message, allowing the caller to set arbitrary headers. The library
- * overwrites `msg->Reply` with its internal ack inbox; the caller must
- * not depend on the previous value being preserved. `msg` is borrowed
- * for the duration of the call; ownership is not transferred.
+ * message, allowing the caller to set arbitrary headers. `msg` is cloned
+ * internally; the clone carries the library's ack-inbox reply subject
+ * while the caller's `msg` — subject, data, headers, and reply — is left
+ * unmodified. `msg` is borrowed for the duration of the call; ownership
+ * is not transferred and the caller remains responsible for destroying
+ * it.
  *
  * @param ack out-param receiving the per-message ack, or `NULL`.
  * @param ctx the fast-publish context.
  * @param msg the message to add. Cannot be `NULL`.
- * @param opts optional per-message options merged into `msg`'s headers;
- *   `NULL` for none.
+ * @param opts optional per-message options; applied to the internal
+ *   clone, not to `msg`. `NULL` for none.
  * @return same status codes as #jsFastPublish_Add.
  */
 NATS_EXTERN natsStatus
@@ -324,13 +326,16 @@ jsFastPublish_Commit(jsPubAck **pubAck, jsFastPublishCtx *ctx,
  * batch and commits it.
  *
  * Behaves identically to #jsFastPublish_Commit but accepts a fully
- * formed message. `msg->Reply` is overwritten with the library's commit
- * reply inbox; `msg` is borrowed for the duration of the call.
+ * formed message. `msg` is cloned internally; the clone carries the
+ * library's commit reply subject while the caller's `msg` is left
+ * unmodified. `msg` is borrowed for the duration of the call; ownership
+ * is not transferred.
  *
  * @param pubAck out-param receiving the commit ack, or `NULL`.
  * @param ctx the fast-publish context.
  * @param msg the final message. Cannot be `NULL`.
- * @param opts optional per-message options; `NULL` for none.
+ * @param opts optional per-message options; applied to the internal
+ *   clone, not to `msg`. `NULL` for none.
  * @param timeout commit deadline in milliseconds. Must be > 0.
  * @return same status codes as #jsFastPublish_Commit.
  */

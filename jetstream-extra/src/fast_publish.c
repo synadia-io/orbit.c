@@ -221,23 +221,60 @@ _buildReply(jsFastPublishCtx *ctx, uint64_t seq, int op)
     return ctx->replySubj;
 }
 
-// Builds the wire message for one batch entry: either creates a fresh
-// natsMsg (*ownMsg set to true) or rewrites the reply of a caller-owned
-// message. Caller holds ctx->mu.
+// Copies every header (including multi-value entries) from src onto dst.
 static natsStatus
-_prepareMsg(natsMsg **out, bool *ownMsg, const char *reply,
-            const char *subject, const void *data, int dataLen,
-            natsMsg *userMsg)
+_copyHeaders(natsMsg *dst, natsMsg *src)
+{
+    const char **keys     = NULL;
+    int          keyCount = 0;
+
+    natsStatus s = natsMsgHeader_Keys(src, &keys, &keyCount);
+    if (s == NATS_NOT_FOUND)
+        return NATS_OK; // src carries no headers
+    if (s != NATS_OK)
+        return s;
+
+    for (int i = 0; s == NATS_OK && i < keyCount; i++)
+    {
+        const char **vals     = NULL;
+        int          valCount = 0;
+
+        s = natsMsgHeader_Values(src, keys[i], &vals, &valCount);
+        for (int j = 0; s == NATS_OK && j < valCount; j++)
+            s = natsMsgHeader_Add(dst, keys[i], vals[j]);
+        free((void *)vals);
+    }
+    free((void *)keys);
+    return s;
+}
+
+// Builds the wire message for one batch entry. A caller-supplied message
+// is cloned into a fresh natsMsg carrying the fast-publish reply inside
+// the message's single allocation, leaving the caller's message
+// untouched; otherwise a fresh natsMsg is built from the raw arguments.
+// Either way *out is a new message the caller of this helper must
+// destroy. Caller holds ctx->mu.
+static natsStatus
+_prepareMsg(natsMsg **out, const char *reply, const char *subject,
+            const void *data, int dataLen, natsMsg *userMsg)
 {
     if (userMsg != NULL)
     {
-        *out    = userMsg;
-        *ownMsg = false;
-        return natsMsg_SetReply(userMsg, reply);
+        subject = natsMsg_GetSubject(userMsg);
+        data    = natsMsg_GetData(userMsg);
+        dataLen = natsMsg_GetDataLength(userMsg);
     }
 
     natsStatus s = natsMsg_Create(out, subject, reply, (const char *)data, dataLen);
-    *ownMsg = (s == NATS_OK);
+    if (s == NATS_OK && userMsg != NULL)
+    {
+        s = _copyHeaders(*out, userMsg);
+        if (s != NATS_OK)
+        {
+            natsMsg_Destroy(*out);
+            *out = NULL;
+        }
+    }
     return s;
 }
 
@@ -506,8 +543,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
             natsMsg *userMsg, jsBatchMsgOpts *opts)
 {
     natsStatus s;
-    natsMsg   *msg    = NULL;
-    bool       ownMsg = false;
+    natsMsg   *msg = NULL;
 
     natsMutex_Lock(ctx->mu);
 
@@ -534,7 +570,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
     uint64_t seq = ctx->sequence;
     int      op  = (seq == 1) ? OP_START : OP_ADD;
 
-    s = _prepareMsg(&msg, &ownMsg, _buildReply(ctx, seq, op),
+    s = _prepareMsg(&msg, _buildReply(ctx, seq, op),
                     subject, data, dataLen, userMsg);
     if (s != NATS_OK)
     {
@@ -553,8 +589,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
     if (s == NATS_OK)
         s = natsConnection_PublishMsg(nc, msg);
 
-    if (ownMsg)
-        natsMsg_Destroy(msg);
+    natsMsg_Destroy(msg);
 
     if (s != NATS_OK)
     {
@@ -648,8 +683,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
         jsBatchMsgOpts *opts, int64_t timeoutMs, bool eob)
 {
     natsStatus      s;
-    natsMsg        *msg    = NULL;
-    bool            ownMsg = false;
+    natsMsg        *msg = NULL;
     natsConnection *nc;
 
     if (timeoutMs <= 0)
@@ -674,7 +708,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     uint64_t seq = ctx->sequence;
     int      op  = eob ? OP_COMMIT_EOB : OP_COMMIT;
 
-    s = _prepareMsg(&msg, &ownMsg, _buildReply(ctx, seq, op),
+    s = _prepareMsg(&msg, _buildReply(ctx, seq, op),
                     eob ? ctx->batchSubject : subject,
                     data, dataLen, userMsg);
     if (s != NATS_OK)
@@ -688,8 +722,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     if (s == NATS_OK)
         s = natsConnection_PublishMsg(nc, msg);
 
-    if (ownMsg)
-        natsMsg_Destroy(msg);
+    natsMsg_Destroy(msg);
 
     if (s != NATS_OK)
     {

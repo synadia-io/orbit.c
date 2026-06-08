@@ -32,10 +32,6 @@ extern "C"
 {
 #endif
 
-typedef void (*natsThreadCb)(void *arg);
-typedef void (*natsInitOnceCb)(void);
-typedef struct __natsSockCtx natsSockCtx;
-
 natsStatus natsMutex_Create(natsMutex **newMutex);
 bool       natsMutex_TryLock(natsMutex *m);
 void       natsMutex_Lock(natsMutex *m);
@@ -49,32 +45,6 @@ natsStatus natsCondition_AbsoluteTimedWait(natsCondition *cond, natsMutex *mutex
 void       natsCondition_Signal(natsCondition *cond);
 void       natsCondition_Broadcast(natsCondition *cond);
 void       natsCondition_Destroy(natsCondition *cond);
-
-bool       nats_InitOnce(natsInitOnceType *control, natsInitOnceCb cb);
-natsStatus natsThread_Create(natsThread **thread, natsThreadCb cb, void *arg);
-void       natsThread_Join(natsThread *t);
-void       natsThread_Detach(natsThread *t);
-bool       natsThread_IsCurrent(natsThread *t);
-void       natsThread_Yield(void);
-void       natsThread_Destroy(natsThread *t);
-natsStatus natsThreadLocal_CreateKey(natsThreadLocal *tl, void (*destructor)(void *));
-void      *natsThreadLocal_Get(natsThreadLocal tl);
-natsStatus natsThreadLocal_SetEx(natsThreadLocal tl, const void *value, bool setErr);
-void       natsThreadLocal_DestroyKey(natsThreadLocal tl);
-
-void       nats_initForOS(void);
-natsStatus natsSock_WaitReady(int waitMode, natsSockCtx *ctx);
-natsStatus natsSock_SetBlocking(natsSock fd, bool blocking);
-bool       natsSock_IsConnected(natsSock fd);
-natsStatus natsSock_Flush(natsSock fd);
-
-#if defined(_WIN32)
-int   nats_asprintf(char **newStr, const char *fmt, ...);
-char *nats_strcasestr(const char *haystack, const char *needle);
-#if _MSC_VER < 1900
-int   nats_snprintf(char *buffer, size_t countszt, char *format, ...);
-#endif
-#endif
 
 #ifdef __cplusplus
 }

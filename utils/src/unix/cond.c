@@ -11,29 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "../natsp.h"
-
-#include <errno.h>
-
-#include "../util.h"
-#include "../mem.h"
+#include "../os_shims.h"
 
 natsStatus
 natsCondition_Create(natsCondition **cond)
 {
-    natsCondition   *c = (natsCondition*) NATS_CALLOC(1, sizeof(natsCondition));
+    natsCondition   *c = (natsCondition*) calloc(1, sizeof(natsCondition));
     natsStatus      s  = NATS_OK;
 
     if (c == NULL)
-        return nats_setDefaultError(NATS_NO_MEMORY);
+        return NATS_NO_MEMORY;
 
     if (pthread_cond_init(c, NULL) != 0)
-        s = nats_setError(NATS_SYS_ERROR, "pthread_cond_init error: %d", errno);
+        s = NATS_SYS_ERROR;
 
     if (s == NATS_OK)
         *cond = c;
     else
-        NATS_FREE(c);
+        free(c);
 
     return s;
 }
@@ -55,7 +50,10 @@ _timedWait(natsCondition *cond, natsMutex *mutex, bool isAbsolute, int64_t timeo
     if (timeout <= 0)
         return NATS_TIMEOUT;
 
-    target = (isAbsolute ? timeout : nats_setTargetTime(timeout));
+    // nats_setTargetTime() is internal to cnats and not exported on all
+    // platforms; nats_Now() (ms since epoch) is public, so compute the
+    // absolute target time directly.
+    target = (isAbsolute ? timeout : nats_Now() + timeout);
 
     ts.tv_sec = target / 1000;
     ts.tv_nsec = (target % 1000) * 1000000;
@@ -74,7 +72,7 @@ _timedWait(natsCondition *cond, natsMutex *mutex, bool isAbsolute, int64_t timeo
     if (r == ETIMEDOUT)
         return NATS_TIMEOUT;
 
-    return nats_setError(NATS_SYS_ERROR, "pthread_cond_timedwait error: %d", errno);
+    return NATS_SYS_ERROR;
 }
 
 natsStatus
@@ -110,5 +108,5 @@ natsCondition_Destroy(natsCondition *cond)
         return;
 
     pthread_cond_destroy(cond);
-    NATS_FREE(cond);
+    free(cond);
 }

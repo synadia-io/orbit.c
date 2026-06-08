@@ -23,60 +23,19 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 
+// These pragmas are MSVC-only; mingw/gcc links Ws2_32 via CMake (ORBIT_EXTRA_LIB)
+// and would otherwise warn on the unknown pragmas.
+#if defined(_MSC_VER)
 #pragma comment(lib, "Ws2_32.lib")
 #pragma warning(disable : 4996)
-
-typedef struct __natsThread
-{
-    HANDLE  t;
-    DWORD   id;
-
-} natsThread;
-
-typedef DWORD               natsThreadLocal;
+#endif
 
 typedef CRITICAL_SECTION    natsMutex;
 typedef CONDITION_VARIABLE  natsCondition;
-typedef INIT_ONCE           natsInitOnceType;
-typedef int                 natsSockLen;
-typedef int                 natsRecvLen;
 
-#define NATS_ONCE_TYPE          INIT_ONCE
-#define NATS_ONCE_STATIC_INIT   INIT_ONCE_STATIC_INIT
-
-#define NATS_SOCK_INVALID               (INVALID_SOCKET)
-#define NATS_SOCK_CLOSE(s)              closesocket((s))
-#define NATS_SOCK_SHUTDOWN(s)           {shutdown((s), SD_BOTH); closesocket((s));}
-#define NATS_SOCK_CONNECT_IN_PROGRESS   (WSAEWOULDBLOCK)
-#define NATS_SOCK_WOULD_BLOCK           (WSAEWOULDBLOCK)
-#define NATS_SOCK_ERROR                 (SOCKET_ERROR)
-#define NATS_SOCK_GET_ERROR             WSAGetLastError()
-
-#define __NATS_FUNCTION__ __FUNCTION__
-
-// Windows doesn't have those..
-// snprintf support is introduced starting MSVC 14.0 (_MSC_VER 1900: Visual Studio 2015)
-#if _MSC_VER < 1900
-#define snprintf    nats_snprintf
-#endif
-#define strcasecmp  _stricmp
-#define strncasecmp _strnicmp
-
-#define nats_vsnprintf(b, sb, f, a) vsnprintf_s((b), (sb), (_TRUNCATE), (f), (a))
-
-#define nats_vscprintf _vscprintf
-
-int
-nats_asprintf(char **newStr, const char *fmt, ...);
-
-char*
-nats_strcasestr(const char *haystack, const char *needle);
-
-#if _MSC_VER < 1900
-int
-nats_snprintf(char *buffer, size_t countszt, char *format, ...);
-#endif
-
-#define nats_strtok         strtok_s
+// Fills *(tm) from *(secs) (UTC); evaluates to true on success. gmtime_s takes
+// its arguments in the opposite order from POSIX gmtime_r and returns an
+// errno_t (0 on success).
+#define nats_gmtime(secs, tm)   (gmtime_s((tm), (secs)) == 0)
 
 #endif /* N_WIN_H_ */
