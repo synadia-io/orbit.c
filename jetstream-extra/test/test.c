@@ -1014,6 +1014,257 @@ test_FastPublishCloseEndsBatch(void)
     JS_TEARDOWN;
 }
 
+void
+test_FastPublishLargeBatchStall(void)
+{
+    jsFastPublishCtx *fp = NULL;
+    jsFastPubAck fpAck = { 0 };
+    jsPubAck *pubAck = NULL;
+    int i;
+    int nMsgs = 250; // exceeds the default 200-message ack window
+    uint64_t maxGap = 0;
+    bool seqOk = true;
+
+    JS_SETUP;
+
+    test("Create batch-publish stream: ");
+    s = _createBatchStream(js, "FBIG", "fbig.>");
+    testCond(s == NATS_OK);
+
+    test("Create fast publisher (default flow control): ");
+    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    testCond((s == NATS_OK) && (fp != NULL));
+
+    // With the default Flow=100 / MaxOutstandingAcks=2, the publisher must
+    // stall and resume across a 200-message window while sending 250.
+    test("Add 250 messages across the stall window: ");
+    for (i = 1; s == NATS_OK && i <= nMsgs; i++)
+    {
+        char subj[32], body[32];
+        snprintf(subj, sizeof(subj), "fbig.%d", i);
+        snprintf(body, sizeof(body), "m%d", i);
+        s = jsFastPublish_Add(&fpAck, fp, nc, subj, body, (int)strlen(body), NULL);
+        if (s == NATS_OK)
+        {
+            if (fpAck.AckSequence > fpAck.BatchSequence)
+                seqOk = false; // AckSequence must never lead BatchSequence
+            if (fpAck.BatchSequence - fpAck.AckSequence > maxGap)
+                maxGap = fpAck.BatchSequence - fpAck.AckSequence;
+        }
+    }
+    // maxGap > 0 proves the publisher outran the flow acks (messages were
+    // in flight), i.e. the stall/window path was actually exercised.
+    testCond((s == NATS_OK) && seqOk && (maxGap > 0));
+
+    test("Commit seals the full batch: ");
+    s = jsFastPublish_Commit(&pubAck, fp, "fbig.commit", "done", 4, NULL, 5000);
+    testCond((s == NATS_OK)
+             && (pubAck != NULL)
+             && (pubAck->Count == (uint64_t)(nMsgs + 1)));
+    jsPubAck_Destroy(pubAck);
+
+    jsFastPublish_Destroy(fp);
+    JS_TEARDOWN;
+}
+
+void
+test_FastPublishMsgHeaders(void)
+{
+    jsFastPublishCtx *fp = NULL;
+    jsPubAck *pubAck = NULL;
+    natsSubscription *sub = NULL;
+    natsMsg *rcv = NULL;
+    natsMsg *um = NULL;
+    jsStreamConfig cfg;
+    jsBatchMsgOpts mo;
+    const char *subjects[1] = { "fhdr.>" };
+    const char *v = NULL;
+    bool ttlOk = false;
+    bool streamOk = false;
+
+    JS_SETUP;
+
+    test("Create batch+TTL stream: ");
+    jsStreamConfig_Init(&cfg);
+    cfg.Name = "FHDR";
+    cfg.Subjects = subjects;
+    cfg.SubjectsLen = 1;
+    cfg.AllowBatched = true;
+    cfg.AllowMsgTTL = true; // accept the per-message Nats-TTL header
+    s = js_AddStream(NULL, js, &cfg, NULL, NULL);
+    testCond(s == NATS_OK);
+
+    // A core subscriber on the subject observes exactly what the publisher
+    // puts on the wire, so we can assert the option/header translation.
+    test("Core-subscribe to observe wire headers: ");
+    s = natsConnection_SubscribeSync(&sub, nc, "fhdr.>");
+    testCond(s == NATS_OK);
+
+    test("Create fast publisher: ");
+    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    testCond((s == NATS_OK) && (fp != NULL));
+
+    test("Add applies TTL and ExpectedStream as headers: ");
+    jsBatchMsgOpts_Init(&mo);
+    mo.TTL = 60000000000LL; // 60s, in nanoseconds
+    mo.ExpectedStream = "FHDR";
+    s = jsFastPublish_Add(NULL, fp, nc, "fhdr.1", "one", 3, &mo);
+    if (s == NATS_OK)
+        s = natsSubscription_NextMsg(&rcv, sub, 2000);
+    if (s == NATS_OK)
+    {
+        natsMsgHeader_Get(rcv, "Nats-TTL", &v);
+        ttlOk = (v != NULL) && (strcmp(v, "60000000000ns") == 0);
+        v = NULL;
+        natsMsgHeader_Get(rcv, "Nats-Expected-Stream", &v);
+        streamOk = (v != NULL) && (strcmp(v, "FHDR") == 0);
+    }
+    natsMsg_Destroy(rcv);
+    rcv = NULL;
+    testCond((s == NATS_OK) && ttlOk && streamOk);
+
+    test("AddMsg copies caller headers onto the wire: ");
+    s = natsMsg_Create(&um, "fhdr.2", NULL, "two", 3);
+    if (s == NATS_OK)
+        s = natsMsgHeader_Set(um, "X-Test", "custom");
+    if (s == NATS_OK)
+        s = jsFastPublish_AddMsg(NULL, fp, um, NULL);
+    if (s == NATS_OK)
+        s = natsSubscription_NextMsg(&rcv, sub, 2000);
+    v = NULL;
+    if (s == NATS_OK)
+        natsMsgHeader_Get(rcv, "X-Test", &v);
+    natsMsg_Destroy(rcv);
+    rcv = NULL;
+    natsMsg_Destroy(um);
+    um = NULL;
+    testCond((s == NATS_OK) && (v != NULL) && (strcmp(v, "custom") == 0));
+
+    test("Commit seals the batch: ");
+    s = jsFastPublish_Commit(&pubAck, fp, "fhdr.3", "three", 5, NULL, 5000);
+    testCond(s == NATS_OK);
+    jsPubAck_Destroy(pubAck);
+
+    natsSubscription_Destroy(sub);
+    jsFastPublish_Destroy(fp);
+    JS_TEARDOWN;
+}
+
+void
+test_FastPublishCommitMsg(void)
+{
+    jsFastPublishCtx *fp = NULL;
+    jsPubAck *pubAck = NULL;
+    natsMsg *msg = NULL;
+
+    JS_SETUP;
+
+    test("Create batch-publish stream: ");
+    s = _createBatchStream(js, "FCM", "fcm.>");
+    testCond(s == NATS_OK);
+
+    test("Create fast publisher: ");
+    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    testCond((s == NATS_OK) && (fp != NULL));
+
+    test("Add a message: ");
+    s = jsFastPublish_Add(NULL, fp, nc, "fcm.1", "first", 5, NULL);
+    testCond(s == NATS_OK);
+
+    test("CommitMsg seals the batch with a prebuilt message: ");
+    s = natsMsg_Create(&msg, "fcm.2", NULL, "last", 4);
+    if (s == NATS_OK)
+        s = jsFastPublish_CommitMsg(&pubAck, fp, msg, NULL, 5000);
+    testCond((s == NATS_OK)
+             && (pubAck != NULL)
+             && (pubAck->Stream != NULL)
+             && (strcmp(pubAck->Stream, "FCM") == 0)
+             && (pubAck->Count == 2));
+    natsMsg_Destroy(msg);
+    jsPubAck_Destroy(pubAck);
+
+    test("Batch reports closed after CommitMsg: ");
+    testCond(jsFastPublish_IsClosed(fp) == true);
+
+    jsFastPublish_Destroy(fp);
+    JS_TEARDOWN;
+}
+
+typedef struct
+{
+    pthread_mutex_t mu;
+    int             count;
+    natsStatus      lastStatus;
+
+} _fpErrCtx;
+
+static void
+_fpOnErr(natsStatus status, const char *description, void *closure)
+{
+    _fpErrCtx *c = (_fpErrCtx *)closure;
+    (void)description;
+    pthread_mutex_lock(&c->mu);
+    c->count++;
+    c->lastStatus = status;
+    pthread_mutex_unlock(&c->mu);
+}
+
+void
+test_FastPublishRejectedBatch(void)
+{
+    jsFastPublishCtx *fp = NULL;
+    jsFastPublisherOptions opts;
+    jsBatchMsgOpts mo;
+    _fpErrCtx ectx = { 0 };
+    int waitedMs = 0;
+    int errCount = 0;
+
+    JS_SETUP;
+
+    pthread_mutex_init(&ectx.mu, NULL);
+
+    test("Create batch-publish stream: ");
+    s = _createBatchStream(js, "FREJ", "frej.>");
+    testCond(s == NATS_OK);
+
+    test("Create fast publisher with an error handler: ");
+    jsFastPublisherOptions_Init(&opts);
+    opts.ErrHandler = _fpOnErr;
+    opts.ErrHandlerClosure = &ectx;
+    s = jsFastPublishCtx_Create(&fp, js, &opts);
+    testCond((s == NATS_OK) && (fp != NULL));
+
+    // The stream is empty, so asserting a last sequence of 999 must be
+    // rejected by the server. The rejection is delivered asynchronously on
+    // the ack inbox and surfaced through the error handler — the Add call
+    // itself may have already returned by then.
+    test("Add with a bogus ExpectedLastSeq is rejected asynchronously: ");
+    jsBatchMsgOpts_Init(&mo);
+    mo.HasExpectedLastSeq = true;
+    mo.ExpectedLastSeq = 999;
+    jsFastPublish_Add(NULL, fp, nc, "frej.1", "x", 1, &mo);
+
+    while (waitedMs < 5000)
+    {
+        pthread_mutex_lock(&ectx.mu);
+        errCount = ectx.count;
+        pthread_mutex_unlock(&ectx.mu);
+        if (errCount > 0 && jsFastPublish_IsClosed(fp))
+            break;
+        nats_Sleep(100);
+        waitedMs += 100;
+    }
+    testCond((errCount > 0) && (jsFastPublish_IsClosed(fp) == true));
+
+    test("Add after a rejected batch fails: ");
+    s = jsFastPublish_Add(NULL, fp, nc, "frej.2", "y", 1, NULL);
+    testCond(s != NATS_OK);
+
+    pthread_mutex_destroy(&ectx.mu);
+    jsFastPublish_Destroy(fp);
+    JS_TEARDOWN;
+}
+
 //=============================================================================
 // main
 //=============================================================================

@@ -23,18 +23,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-// JetStream publish header names. These live in nats.c's private js.h;
-// the wire format is stable so we replicate them here.
 #define HDR_EXPECTED_STREAM             "Nats-Expected-Stream"
 #define HDR_EXPECTED_LAST_SEQ           "Nats-Expected-Last-Sequence"
 #define HDR_EXPECTED_LAST_SUBJ_SEQ      "Nats-Expected-Last-Subject-Sequence"
 #define HDR_EXPECTED_LAST_SUBJ_SEQ_SUBJ "Nats-Expected-Last-Subject-Sequence-Subject"
 #define HDR_MSG_TTL                     "Nats-TTL"
 
-// Reply-subject suffix the server expects on every fast-publish reply.
 #define REPLY_SUFFIX "$FI"
 
-// Gap-handling tokens encoded into the reply prefix.
 #define GAP_FAIL "fail"
 #define GAP_OK   "ok"
 
@@ -58,9 +54,8 @@ struct __jsFastPublishCtx
     natsCondition  *cond;
 
     jsCtx          *js;
-    natsConnection *nc; // captured on first Add; borrowed.
+    natsConnection *nc;
 
-    // Options snapshot.
     uint16_t                flow;
     uint16_t                maxOutstandingAcks;
     int64_t                 ackTimeoutMs;
@@ -68,22 +63,18 @@ struct __jsFastPublishCtx
     jsFastPublishErrHandler errHandler;
     void                    *errHandlerClosure;
 
-    // Ack-inbox state.
-    char             *ackInboxPrefix; // freshly minted inbox e.g. "_INBOX.xxx"
-    char             *replyPrefix;    // "<inbox>.<flow>.<gap>." cached
-    char             replySubj[256];  // scratch for the per-message reply subject
+    char             *ackInboxPrefix;
+    char             *replyPrefix;
+    char             replySubj[256];
     natsSubscription *ackSub;
 
-    // Batch state.
-    uint64_t sequence;      // 1-based.
-    uint64_t ackSequence;   // highest in-batch sequence flow-acked.
-    char    *batchSubject;  // subject of the first message, for EOB close.
+    uint64_t sequence;
+    uint64_t ackSequence;
+    char    *batchSubject;
     bool     closed;
 
-    // First-ack signaling.
     bool firstAckArrived;
 
-    // Commit signaling.
     bool       commitArrived;
     jsPubAck   *commitAck;
     natsStatus commitErr;
@@ -99,9 +90,6 @@ _reportErr(jsFastPublishCtx *ctx, natsStatus s, const char *desc)
     ctx->errHandler(s, desc, ctx->errHandlerClosure);
 }
 
-// Quick membership check for `"type":"<value>"` in a JSON blob. The wire
-// schema is server-controlled and emitted without whitespace, so a
-// straight scan is correct.
 static bool
 _jsonTypeIs(const char *data, int dataLen, const char *typeVal)
 {
@@ -119,9 +107,6 @@ _jsonTypeIs(const char *data, int dataLen, const char *typeVal)
     return false;
 }
 
-// Locate `"key":` and return a pointer to the first byte of the value
-// (post whitespace). Only safe on flat JSON without nested escapes,
-// which matches the schemas we deal with.
 static const char *
 _jsonFindValue(const char *data, int dataLen, const char *key)
 {
@@ -184,9 +169,6 @@ _jsonExtractBool(const char *data, int dataLen, const char *key, bool *out)
     return false;
 }
 
-// Extract `"key":"<string>"` into a fresh malloc'd null-terminated
-// string. Does not interpret backslash escapes — none appear in the
-// fields we care about.
 static bool
 _jsonExtractString(const char *data, int dataLen, const char *key, char **out)
 {
@@ -221,7 +203,6 @@ _buildReply(jsFastPublishCtx *ctx, uint64_t seq, int op)
     return ctx->replySubj;
 }
 
-// Copies every header (including multi-value entries) from src onto dst.
 static natsStatus
 _copyHeaders(natsMsg *dst, natsMsg *src)
 {
@@ -252,8 +233,7 @@ _copyHeaders(natsMsg *dst, natsMsg *src)
 // is cloned into a fresh natsMsg carrying the fast-publish reply inside
 // the message's single allocation, leaving the caller's message
 // untouched; otherwise a fresh natsMsg is built from the raw arguments.
-// Either way *out is a new message the caller of this helper must
-// destroy. Caller holds ctx->mu.
+// Caller holds ctx->mu.
 static natsStatus
 _prepareMsg(natsMsg **out, const char *reply, const char *subject,
             const void *data, int dataLen, natsMsg *userMsg)
@@ -313,7 +293,7 @@ _applyMsgOpts(natsMsg *msg, jsBatchMsgOpts *opts)
 }
 
 // Parse a commit-ack JSON body into a fresh jsPubAck compatible with
-// jsPubAck_Destroy (both use libc free under the hood).
+// jsPubAck_Destroy
 static jsPubAck *
 _parseCommitAck(const char *data, int dataLen)
 {
@@ -330,16 +310,17 @@ _parseCommitAck(const char *data, int dataLen)
     return pa;
 }
 
-// ----- ack handler -----------------------------------------------------------
-
 static void
 _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
 {
     (void)nc;
     (void)sub;
-    jsFastPublishCtx *ctx = (jsFastPublishCtx *)closure;
-    const char       *data = natsMsg_GetData(msg);
+
+    jsFastPublishCtx *ctx     = (jsFastPublishCtx *)closure;
+    const char       *data    = natsMsg_GetData(msg);
     int               dataLen = natsMsg_GetDataLength(msg);
+    char              desc[192];
+    bool              report  = false; // emit desc via the error handler after unlock
 
     natsMutex_Lock(ctx->mu);
 
@@ -348,56 +329,42 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
         uint64_t lastSeq = 0, curSeq = 0;
         _jsonExtractUint64(data, dataLen, "last_seq", &lastSeq);
         _jsonExtractUint64(data, dataLen, "seq", &curSeq);
-        char desc[128];
         snprintf(desc, sizeof(desc),
                  "fast publish gap: expected_last=%" PRIu64 " current=%" PRIu64,
                  lastSeq, curSeq);
+        report = true;
         if (!ctx->continueOnGap)
         {
             ctx->closed = true;
             natsCondition_Broadcast(ctx->cond);
         }
-        natsMutex_Unlock(ctx->mu);
-        _reportErr(ctx, NATS_ERR, desc);
-        natsMsg_Destroy(msg);
-        return;
     }
-    if (_jsonTypeIs(data, dataLen, "ack"))
+    else if (_jsonTypeIs(data, dataLen, "ack"))
     {
         uint64_t flowAckSeq = 0;
         uint64_t newFlow    = 0;
         _jsonExtractUint64(data, dataLen, "seq", &flowAckSeq);
         if (_jsonExtractUint64(data, dataLen, "msgs", &newFlow) && newFlow > 0)
             ctx->flow = (uint16_t)newFlow;
-        ctx->ackSequence = flowAckSeq;
-        if (!ctx->firstAckArrived)
-            ctx->firstAckArrived = true;
+        ctx->ackSequence     = flowAckSeq;
+        ctx->firstAckArrived = true;
         natsCondition_Broadcast(ctx->cond);
-        natsMutex_Unlock(ctx->mu);
-        natsMsg_Destroy(msg);
-        return;
     }
-    if (_jsonTypeIs(data, dataLen, "err"))
+    else if (_jsonTypeIs(data, dataLen, "err"))
     {
         uint64_t errSeq = 0;
         _jsonExtractUint64(data, dataLen, "seq", &errSeq);
-        char desc[96];
         snprintf(desc, sizeof(desc),
                  "fast publish error at sequence %" PRIu64, errSeq);
-        natsMutex_Unlock(ctx->mu);
-        _reportErr(ctx, NATS_ERR, desc);
-        natsMsg_Destroy(msg);
-        return;
+        report = true;
     }
-
-    // No type tag => either a commit ack or a terminal error response.
-    // An error response carries an "error" object instead of a pub-ack;
-    // it ends the batch just as a commit does.
-    if (_jsonFindValue(data, dataLen, "error") != NULL)
+    else if (_jsonFindValue(data, dataLen, "error") != NULL)
     {
-        uint64_t errCode = 0;
+        // No type tag but an "error" object => terminal error response. It
+        // carries an error object instead of a pub-ack and ends the batch
+        // just as a commit does.
+        uint64_t errCode  = 0;
         char     *errDesc = NULL;
-        char     desc[192];
 
         _jsonExtractUint64(data, dataLen, "err_code", &errCode);
         _jsonExtractString(data, dataLen, "description", &errDesc);
@@ -409,31 +376,34 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
             snprintf(desc, sizeof(desc),
                      "fast publish rejected (err_code %" PRIu64 ")", errCode);
         free(errDesc);
+        report = true;
 
         ctx->commitErr     = NATS_ERR;
         ctx->commitArrived = true;
         ctx->closed        = true;
         natsCondition_Broadcast(ctx->cond);
-        natsMutex_Unlock(ctx->mu);
-        _reportErr(ctx, NATS_ERR, desc);
-        natsMsg_Destroy(msg);
-        return;
+    }
+    else
+    {
+        // No type tag and no error => commit ack (end of batch). A body
+        // with no "stream" is not a valid pub-ack; treat it as a failed
+        // commit.
+        jsPubAck *pa   = _parseCommitAck(data, dataLen);
+        ctx->commitAck = pa;
+        if (pa == NULL)
+            ctx->commitErr = NATS_NO_MEMORY;
+        else if (pa->Stream == NULL)
+            ctx->commitErr = NATS_ERR;
+        else
+            ctx->commitErr = NATS_OK;
+        ctx->commitArrived = true;
+        ctx->closed        = true;
+        natsCondition_Broadcast(ctx->cond);
     }
 
-    // No type tag and no error => commit ack (end of batch). A body with
-    // no "stream" is not a valid pub-ack; treat it as a failed commit.
-    jsPubAck *pa = _parseCommitAck(data, dataLen);
-    ctx->commitAck = pa;
-    if (pa == NULL)
-        ctx->commitErr = NATS_NO_MEMORY;
-    else if (pa->Stream == NULL)
-        ctx->commitErr = NATS_ERR;
-    else
-        ctx->commitErr = NATS_OK;
-    ctx->commitArrived = true;
-    ctx->closed        = true;
-    natsCondition_Broadcast(ctx->cond);
     natsMutex_Unlock(ctx->mu);
+    if (report)
+        _reportErr(ctx, NATS_ERR, desc);
     natsMsg_Destroy(msg);
 }
 
@@ -499,41 +469,68 @@ jsFastPublishCtx_Create(jsFastPublishCtx **out, jsCtx *js, jsFastPublisherOption
     return NATS_OK;
 }
 
-// Lazily create the ack inbox + subscription on the first publishing
-// call. Must be invoked under ctx->mu.
 static natsStatus
 _ensureInbox(jsFastPublishCtx *ctx, natsConnection *nc)
 {
+    natsInbox        *inbox       = NULL;
+    char             *inboxPrefix = NULL;
+    char             *replyPrefix = NULL;
+    char             *subFilter   = NULL;
+    natsSubscription *sub         = NULL;
+    const char       *gap;
+    size_t            need;
+    size_t            subLen;
+    natsStatus        s;
+
     if (ctx->ackSub != NULL)
         return NATS_OK;
 
-    natsInbox *inbox = NULL;
-    natsStatus s = natsInbox_Create(&inbox);
+    // Everything is built into locals and only published into ctx once the
+    // subscription succeeds. A failure leaves ctx untouched, so a later
+    // retry re-enters cleanly instead of leaking a half-built inbox.
+    s = natsInbox_Create(&inbox);
     if (s != NATS_OK)
         return s;
 
-    ctx->ackInboxPrefix = strdup((const char *)inbox);
+    inboxPrefix = strdup((const char *)inbox);
     natsInbox_Destroy(inbox);
-    if (ctx->ackInboxPrefix == NULL)
+    if (inboxPrefix == NULL)
         return NATS_NO_MEMORY;
 
-    const char *gap  = ctx->continueOnGap ? GAP_OK : GAP_FAIL;
-    size_t      need = strlen(ctx->ackInboxPrefix) + 32;
-    ctx->replyPrefix = (char *)malloc(need);
-    if (ctx->replyPrefix == NULL)
+    gap  = ctx->continueOnGap ? GAP_OK : GAP_FAIL;
+    need = strlen(inboxPrefix) + 32;
+    replyPrefix = (char *)malloc(need);
+    if (replyPrefix == NULL)
+    {
+        free(inboxPrefix);
         return NATS_NO_MEMORY;
-    snprintf(ctx->replyPrefix, need, "%s.%u.%s.",
-             ctx->ackInboxPrefix, (unsigned)ctx->flow, gap);
+    }
+    snprintf(replyPrefix, need, "%s.%u.%s.",
+             inboxPrefix, (unsigned)ctx->flow, gap);
 
-    size_t subLen    = strlen(ctx->ackInboxPrefix) + 3;
-    char  *subFilter = (char *)malloc(subLen);
+    subLen    = strlen(inboxPrefix) + 3;
+    subFilter = (char *)malloc(subLen);
     if (subFilter == NULL)
+    {
+        free(inboxPrefix);
+        free(replyPrefix);
         return NATS_NO_MEMORY;
-    snprintf(subFilter, subLen, "%s.>", ctx->ackInboxPrefix);
+    }
+    snprintf(subFilter, subLen, "%s.>", inboxPrefix);
 
-    s = natsConnection_Subscribe(&ctx->ackSub, nc, subFilter, _onAck, ctx);
+    s = natsConnection_Subscribe(&sub, nc, subFilter, _onAck, ctx);
     free(subFilter);
-    return s;
+    if (s != NATS_OK)
+    {
+        free(inboxPrefix);
+        free(replyPrefix);
+        return s;
+    }
+
+    ctx->ackInboxPrefix = inboxPrefix;
+    ctx->replyPrefix    = replyPrefix;
+    ctx->ackSub         = sub;
+    return NATS_OK;
 }
 
 // Common publish path for the Add family.
@@ -732,7 +729,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     }
 
     int64_t deadline = nats_Now() + timeoutMs;
-    while (!ctx->commitArrived)
+    while (!ctx->commitArrived && !ctx->closed)
     {
         int64_t remaining = deadline - nats_Now();
         if (remaining <= 0)
@@ -742,6 +739,15 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
             return NATS_TIMEOUT;
         }
         natsCondition_TimedWait(ctx->cond, ctx->mu, remaining);
+    }
+
+    // The batch can be closed out from under an in-flight commit without a
+    // commit ack ever arriving — e.g. a fatal gap detected on the ack
+    // inbox. Fail promptly rather than blocking until the deadline.
+    if (!ctx->commitArrived)
+    {
+        natsMutex_Unlock(ctx->mu);
+        return NATS_ERR;
     }
 
     jsPubAck   *pa        = ctx->commitAck;
