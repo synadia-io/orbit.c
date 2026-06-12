@@ -1,7 +1,21 @@
 #---------------------------------------
-# Grab all files in 'src'
+# Grab the os-agnostic files in 'src', plus the platform-specific
+# implementations from the matching 'unix'/'win' subdirectory.
+#
+# The top-level GLOB is non-recursive, so the platform sources must be
+# added explicitly; otherwise natsMutex_*/natsCondition_* are never
+# compiled and the build silently relies on cnats leaking its internal
+# symbols (which does not happen on Windows).
 #---------------------------------------
 file(GLOB SOURCES "*.c")
+
+if(WIN32)
+  file(GLOB PLATFORM_SOURCES "win/*.c")
+else()
+  file(GLOB PLATFORM_SOURCES "unix/*.c")
+endif()
+
+list(APPEND SOURCES ${PLATFORM_SOURCES})
 
 # --------------------------------------
 # Create the shared and static libraries

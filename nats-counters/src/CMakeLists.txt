@@ -31,3 +31,10 @@ if(ORBIT_BUILD_LIB_STATIC)
         $<INSTALL_INTERFACE:include>)
   install(TARGETS nats_counters_static ARCHIVE DESTINATION ${ORBIT_LIBDIR})
 endif()
+
+# --------------------------------------
+# Install public headers
+# --------------------------------------
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/nats_counters.h
+  DESTINATION ${ORBIT_INCLUDE_DIR})

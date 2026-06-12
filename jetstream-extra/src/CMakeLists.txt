@@ -31,3 +31,11 @@ if(ORBIT_BUILD_LIB_STATIC)
         $<INSTALL_INTERFACE:include>)
   install(TARGETS jetstream_extra_static ARCHIVE DESTINATION ${ORBIT_LIBDIR})
 endif()
+
+# --------------------------------------
+# Install public headers
+# --------------------------------------
+install(FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/batch_fetch.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/fast_publish.h
+  DESTINATION ${ORBIT_INCLUDE_DIR})
