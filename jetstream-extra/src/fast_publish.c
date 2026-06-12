@@ -46,6 +46,7 @@ enum
     OP_ADD        = 1,
     OP_COMMIT     = 2,
     OP_COMMIT_EOB = 3,
+    OP_PING       = 4,
 };
 
 struct __jsFastPublishCtx
@@ -53,7 +54,6 @@ struct __jsFastPublishCtx
     natsMutex      *mu;
     natsCondition  *cond;
 
-    jsCtx          *js;
     natsConnection *nc;
 
     uint16_t                flow;
@@ -75,6 +75,7 @@ struct __jsFastPublishCtx
 
     bool firstAckArrived;
 
+    bool       commitPending;
     bool       commitArrived;
     jsPubAck   *commitAck;
     natsStatus commitErr;
@@ -324,6 +325,17 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
 
     natsMutex_Lock(ctx->mu);
 
+    // Once the batch is closed the ack subscription is still live and may
+    // deliver late or duplicate control messages. Ignore them: a second
+    // commit ack would overwrite (and leak) ctx->commitAck, and no state
+    // change is ever correct after close.
+    if (ctx->closed)
+    {
+        natsMutex_Unlock(ctx->mu);
+        natsMsg_Destroy(msg);
+        return;
+    }
+
     if (_jsonTypeIs(data, dataLen, "gap"))
     {
         uint64_t lastSeq = 0, curSeq = 0;
@@ -362,25 +374,31 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
     {
         // No type tag but an "error" object => terminal error response. It
         // carries an error object instead of a pub-ack and ends the batch
-        // just as a commit does.
+        // just as a commit does. Report it exactly once: if a commit is
+        // waiting, surface it there (the commit call returns the error);
+        // otherwise hand it to the async error handler.
         uint64_t errCode  = 0;
         char     *errDesc = NULL;
 
         _jsonExtractUint64(data, dataLen, "err_code", &errCode);
         _jsonExtractString(data, dataLen, "description", &errDesc);
-        if (errDesc != NULL)
-            snprintf(desc, sizeof(desc),
-                     "fast publish rejected (err_code %" PRIu64 "): %s",
-                     errCode, errDesc);
-        else
-            snprintf(desc, sizeof(desc),
-                     "fast publish rejected (err_code %" PRIu64 ")", errCode);
-        free(errDesc);
-        report = true;
 
         ctx->commitErr     = NATS_ERR;
         ctx->commitArrived = true;
         ctx->closed        = true;
+
+        if (!ctx->commitPending)
+        {
+            if (errDesc != NULL)
+                snprintf(desc, sizeof(desc),
+                         "fast publish rejected (err_code %" PRIu64 "): %s",
+                         errCode, errDesc);
+            else
+                snprintf(desc, sizeof(desc),
+                         "fast publish rejected (err_code %" PRIu64 ")", errCode);
+            report = true;
+        }
+        free(errDesc);
         natsCondition_Broadcast(ctx->cond);
     }
     else
@@ -430,16 +448,17 @@ jsFastPublisherOptions_Init(jsFastPublisherOptions *opts)
 // ----- lifecycle -------------------------------------------------------------
 
 natsStatus
-jsFastPublishCtx_Create(jsFastPublishCtx **out, jsCtx *js, jsFastPublisherOptions *opts)
+jsFastPublishCtx_Create(jsFastPublishCtx **out, natsConnection *nc,
+                        jsFastPublisherOptions *opts)
 {
-    if (out == NULL || js == NULL)
+    if (out == NULL || nc == NULL)
         return NATS_INVALID_ARG;
 
     jsFastPublishCtx *ctx = (jsFastPublishCtx *)calloc(1, sizeof(*ctx));
     if (ctx == NULL)
         return NATS_NO_MEMORY;
 
-    ctx->js                 = js;
+    ctx->nc                 = nc;
     ctx->flow               = DEFAULT_FLOW;
     ctx->maxOutstandingAcks = DEFAULT_MAX_OUTSTANDING_ACKS;
     ctx->ackTimeoutMs       = DEFAULT_ACK_TIMEOUT_MS;
@@ -470,7 +489,7 @@ jsFastPublishCtx_Create(jsFastPublishCtx **out, jsCtx *js, jsFastPublisherOption
 }
 
 static natsStatus
-_ensureInbox(jsFastPublishCtx *ctx, natsConnection *nc)
+_ensureInbox(jsFastPublishCtx *ctx)
 {
     natsInbox        *inbox       = NULL;
     char             *inboxPrefix = NULL;
@@ -518,7 +537,7 @@ _ensureInbox(jsFastPublishCtx *ctx, natsConnection *nc)
     }
     snprintf(subFilter, subLen, "%s.>", inboxPrefix);
 
-    s = natsConnection_Subscribe(&sub, nc, subFilter, _onAck, ctx);
+    s = natsConnection_Subscribe(&sub, ctx->nc, subFilter, _onAck, ctx);
     free(subFilter);
     if (s != NATS_OK)
     {
@@ -533,9 +552,25 @@ _ensureInbox(jsFastPublishCtx *ctx, natsConnection *nc)
     return NATS_OK;
 }
 
+// Flow acks, gaps and commit acks are all best-effort and may be lost in
+// transit. While stalled or awaiting a commit ack, the publisher pings the
+// server (reusing the highest sequence sent so far) to prompt it to resend
+// its latest ack, recovering rather than stalling out to the deadline.
+// Caller holds ctx->mu.
+static natsStatus
+_publishPing(jsFastPublishCtx *ctx)
+{
+    if (ctx->batchSubject == NULL)
+        return NATS_OK; // nothing published yet; nothing to ping about
+
+    const char *reply = _buildReply(ctx, ctx->sequence, OP_PING);
+    return natsConnection_PublishRequest(ctx->nc, ctx->batchSubject, reply,
+                                         NULL, 0);
+}
+
 // Common publish path for the Add family.
 static natsStatus
-_addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
+_addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
             const char *subject, const void *data, int dataLen,
             natsMsg *userMsg, jsBatchMsgOpts *opts)
 {
@@ -549,14 +584,8 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
         natsMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
-    if (ctx->nc != NULL && ctx->nc != nc)
-    {
-        natsMutex_Unlock(ctx->mu);
-        return NATS_INVALID_ARG;
-    }
-    ctx->nc = nc;
 
-    s = _ensureInbox(ctx, nc);
+    s = _ensureInbox(ctx);
     if (s != NATS_OK)
     {
         natsMutex_Unlock(ctx->mu);
@@ -576,6 +605,8 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
         return s;
     }
 
+    bool published = false;
+
     s = _applyMsgOpts(msg, opts);
     if (s == NATS_OK && ctx->batchSubject == NULL)
     {
@@ -584,13 +615,29 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
             s = NATS_NO_MEMORY;
     }
     if (s == NATS_OK)
-        s = natsConnection_PublishMsg(nc, msg);
+    {
+        s         = natsConnection_PublishMsg(ctx->nc, msg);
+        published = true;
+    }
 
     natsMsg_Destroy(msg);
 
     if (s != NATS_OK)
     {
-        ctx->closed = true;
+        if (published)
+        {
+            // The publish itself failed: the message may be partly on the
+            // wire, leaving the batch in an indeterminate state. Close it.
+            ctx->closed = true;
+        }
+        else
+        {
+            // Failed before anything reached the wire (option/header or a
+            // bookkeeping allocation). The batch is untouched, so undo the
+            // sequence bump and leave it open for retry — matching the
+            // _prepareMsg failure path above.
+            ctx->sequence--;
+        }
         natsMutex_Unlock(ctx->mu);
         return s;
     }
@@ -619,18 +666,41 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
     }
     else
     {
-        uint64_t window   = (uint64_t)ctx->flow * (uint64_t)ctx->maxOutstandingAcks;
-        int64_t  deadline = nats_Now() + ctx->ackTimeoutMs;
-        while (!ctx->closed && ctx->ackSequence + window <= ctx->sequence)
+        int64_t deadline     = nats_Now() + ctx->ackTimeoutMs;
+        int64_t pingInterval = ctx->ackTimeoutMs / 3;
+        if (pingInterval <= 0)
+            pingInterval = ctx->ackTimeoutMs;
+        int64_t nextPing = nats_Now() + pingInterval;
+
+        // The window is recomputed each pass because the server may lower
+        // ctx->flow via a flow ack mid-stall.
+        while (!ctx->closed
+               && ctx->ackSequence
+                          + (uint64_t)ctx->flow * (uint64_t)ctx->maxOutstandingAcks
+                      <= ctx->sequence)
         {
-            int64_t remaining = deadline - nats_Now();
-            if (remaining <= 0)
+            int64_t now = nats_Now();
+            if (now >= deadline)
             {
                 ctx->closed = true;
                 natsMutex_Unlock(ctx->mu);
                 return NATS_TIMEOUT;
             }
-            natsCondition_TimedWait(ctx->cond, ctx->mu, remaining);
+            if (now >= nextPing)
+            {
+                s = _publishPing(ctx);
+                if (s != NATS_OK)
+                {
+                    ctx->closed = true;
+                    natsMutex_Unlock(ctx->mu);
+                    return s;
+                }
+                nextPing = now + pingInterval;
+            }
+            int64_t wake = (nextPing < deadline ? nextPing : deadline) - now;
+            if (wake <= 0)
+                wake = 1;
+            natsCondition_TimedWait(ctx->cond, ctx->mu, wake);
         }
         if (ctx->closed)
         {
@@ -650,13 +720,13 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx, natsConnection *nc,
 }
 
 natsStatus
-jsFastPublish_Add(jsFastPubAck *ack, jsFastPublishCtx *ctx, natsConnection *nc,
+jsFastPublish_Add(jsFastPubAck *ack, jsFastPublishCtx *ctx,
                   const char *subject, const void *data, int dataLen,
                   jsBatchMsgOpts *opts)
 {
-    if (ctx == NULL || nc == NULL || subject == NULL)
+    if (ctx == NULL || subject == NULL)
         return NATS_INVALID_ARG;
-    return _addPublish(ack, ctx, nc, subject, data, dataLen, NULL, opts);
+    return _addPublish(ack, ctx, subject, data, dataLen, NULL, opts);
 }
 
 natsStatus
@@ -665,10 +735,7 @@ jsFastPublish_AddMsg(jsFastPubAck *ack, jsFastPublishCtx *ctx, natsMsg *msg,
 {
     if (ctx == NULL || msg == NULL)
         return NATS_INVALID_ARG;
-    // first call must be jsFastPublish_Add to register the connection
-    if (ctx->nc == NULL)
-        return NATS_INVALID_ARG;
-    return _addPublish(ack, ctx, ctx->nc, NULL, NULL, 0, msg, opts);
+    return _addPublish(ack, ctx, NULL, NULL, 0, msg, opts);
 }
 
 // Common commit path. eob == true uses an empty body and OP_COMMIT_EOB
@@ -693,13 +760,13 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
         natsMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
-    nc = ctx->nc;
-    if (nc == NULL || ctx->ackSub == NULL)
+    if (ctx->ackSub == NULL)
     {
         // Nothing has been added: nothing to commit / close.
         natsMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
+    nc = ctx->nc;
 
     ctx->sequence++;
     uint64_t seq = ctx->sequence;
@@ -710,7 +777,10 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
                     data, dataLen, userMsg);
     if (s != NATS_OK)
     {
-        ctx->sequence--;
+        // A commit is terminal: the documented contract is that the
+        // context is closed on any return, so close here too rather than
+        // leaving the batch open as the Add path does.
+        ctx->closed = true;
         natsMutex_Unlock(ctx->mu);
         return s;
     }
@@ -728,17 +798,41 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
         return s;
     }
 
-    int64_t deadline = nats_Now() + timeoutMs;
+    // A waiting commit takes ownership of a terminal error response so it is
+    // not also dispatched to the async error handler (see _onAck).
+    ctx->commitPending = true;
+
+    int64_t deadline     = nats_Now() + timeoutMs;
+    int64_t pingInterval = timeoutMs / 3;
+    if (pingInterval <= 0)
+        pingInterval = timeoutMs;
+    int64_t nextPing = nats_Now() + pingInterval;
+
     while (!ctx->commitArrived && !ctx->closed)
     {
-        int64_t remaining = deadline - nats_Now();
-        if (remaining <= 0)
+        int64_t now = nats_Now();
+        if (now >= deadline)
         {
             ctx->closed = true;
             natsMutex_Unlock(ctx->mu);
             return NATS_TIMEOUT;
         }
-        natsCondition_TimedWait(ctx->cond, ctx->mu, remaining);
+        if (now >= nextPing)
+        {
+            // The commit ack may have been lost; prompt a resend.
+            s = _publishPing(ctx);
+            if (s != NATS_OK)
+            {
+                ctx->closed = true;
+                natsMutex_Unlock(ctx->mu);
+                return s;
+            }
+            nextPing = now + pingInterval;
+        }
+        int64_t wake = (nextPing < deadline ? nextPing : deadline) - now;
+        if (wake <= 0)
+            wake = 1;
+        natsCondition_TimedWait(ctx->cond, ctx->mu, wake);
     }
 
     // The batch can be closed out from under an in-flight commit without a

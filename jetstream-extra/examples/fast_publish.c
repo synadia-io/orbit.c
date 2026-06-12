@@ -67,7 +67,7 @@ main(int argc, char **argv)
 
     // A context with default flow control: one flow ack per 100 messages,
     // up to 2 outstanding ack windows before Add stalls.
-    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    s = jsFastPublishCtx_Create(&fp, nc, NULL);
     if (s != NATS_OK)
         goto done;
 
@@ -79,7 +79,7 @@ main(int argc, char **argv)
         snprintf(subj, sizeof(subj), "orders.new.%d", i);
         snprintf(body, sizeof(body), "{\"order\":%d}", i);
 
-        s = jsFastPublish_Add(&ack, fp, nc, subj, body, (int)strlen(body), NULL);
+        s = jsFastPublish_Add(&ack, fp, subj, body, (int)strlen(body), NULL);
         if (s != NATS_OK)
             goto done;
     }

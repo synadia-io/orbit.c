@@ -828,14 +828,14 @@ void
 test_FastPublishCreateValidation(void)
 {
     jsFastPublishCtx *ctx = NULL;
-    jsCtx *js = (jsCtx *)0x1; // Create only stores js, never dereferences it
+    natsConnection *nc = (natsConnection *)0x1; // Create only stores nc, never dereferences it
     natsStatus s;
 
     test("NULL out-param rejected: ");
-    s = jsFastPublishCtx_Create(NULL, js, NULL);
+    s = jsFastPublishCtx_Create(NULL, nc, NULL);
     testCond(s == NATS_INVALID_ARG);
 
-    test("NULL js rejected: ");
+    test("NULL connection rejected: ");
     s = jsFastPublishCtx_Create(&ctx, NULL, NULL);
     testCond((s == NATS_INVALID_ARG) && (ctx == NULL));
 }
@@ -844,19 +844,14 @@ void
 test_FastPublishAddValidation(void)
 {
     jsFastPublishCtx *fakeCtx = (jsFastPublishCtx *)0x1; // never dereferenced
-    natsConnection *fakeNc = (natsConnection *)0x1;
     natsStatus s;
 
     test("Add NULL ctx rejected: ");
-    s = jsFastPublish_Add(NULL, NULL, fakeNc, "s", "d", 1, NULL);
-    testCond(s == NATS_INVALID_ARG);
-
-    test("Add NULL connection rejected: ");
-    s = jsFastPublish_Add(NULL, fakeCtx, NULL, "s", "d", 1, NULL);
+    s = jsFastPublish_Add(NULL, NULL, "s", "d", 1, NULL);
     testCond(s == NATS_INVALID_ARG);
 
     test("Add NULL subject rejected: ");
-    s = jsFastPublish_Add(NULL, fakeCtx, fakeNc, NULL, "d", 1, NULL);
+    s = jsFastPublish_Add(NULL, fakeCtx, NULL, "d", 1, NULL);
     testCond(s == NATS_INVALID_ARG);
 
     test("AddMsg NULL ctx rejected: ");
@@ -900,8 +895,7 @@ void
 test_FastPublishLifecycleNoServer(void)
 {
     jsFastPublishCtx *ctx = NULL;
-    jsCtx *js = (jsCtx *)0x1; // Create only stores js, never dereferences it
-    natsMsg *msg = NULL;
+    natsConnection *nc = (natsConnection *)0x1; // Create only stores nc, never dereferences it
     natsStatus s;
 
     test("IsClosed(NULL) returns true: ");
@@ -912,18 +906,11 @@ test_FastPublishLifecycleNoServer(void)
     testCond(true);
 
     test("Create succeeds with default options: ");
-    s = jsFastPublishCtx_Create(&ctx, js, NULL);
+    s = jsFastPublishCtx_Create(&ctx, nc, NULL);
     testCond((s == NATS_OK) && (ctx != NULL));
 
     test("Fresh batch reports not closed: ");
     testCond(jsFastPublish_IsClosed(ctx) == false);
-
-    test("AddMsg before first Add is rejected (no connection): ");
-    s = natsMsg_Create(&msg, "test.x", NULL, "hi", 2);
-    if (s == NATS_OK)
-        s = jsFastPublish_AddMsg(NULL, ctx, msg, NULL);
-    testCond(s == NATS_INVALID_ARG);
-    natsMsg_Destroy(msg);
 
     test("Close on an empty batch returns NATS_ERR: ");
     s = jsFastPublish_Close(NULL, ctx, 1000);
@@ -951,11 +938,11 @@ test_FastPublishHappyPath(void)
     testCond(s == NATS_OK);
 
     test("Create fast publisher: ");
-    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    s = jsFastPublishCtx_Create(&fp, nc, NULL);
     testCond((s == NATS_OK) && (fp != NULL));
 
     test("Add first message: ");
-    s = jsFastPublish_Add(&fpAck, fp, nc, "fast.1", "message 1", 9, NULL);
+    s = jsFastPublish_Add(&fpAck, fp, "fast.1", "message 1", 9, NULL);
     testCond((s == NATS_OK) && (fpAck.BatchSequence == 1));
 
     test("AddMsg second message: ");
@@ -977,7 +964,7 @@ test_FastPublishHappyPath(void)
     testCond(jsFastPublish_IsClosed(fp) == true);
 
     test("Add after commit is rejected: ");
-    s = jsFastPublish_Add(NULL, fp, nc, "fast.4", "message 4", 9, NULL);
+    s = jsFastPublish_Add(NULL, fp, "fast.4", "message 4", 9, NULL);
     testCond(s == NATS_ERR);
 
     jsFastPublish_Destroy(fp);
@@ -996,11 +983,11 @@ test_FastPublishCloseEndsBatch(void)
     testCond(s == NATS_OK);
 
     test("Create fast publisher: ");
-    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    s = jsFastPublishCtx_Create(&fp, nc, NULL);
     testCond((s == NATS_OK) && (fp != NULL));
 
     test("Add a message: ");
-    s = jsFastPublish_Add(NULL, fp, nc, "fastc.1", "only", 4, NULL);
+    s = jsFastPublish_Add(NULL, fp, "fastc.1", "only", 4, NULL);
     testCond(s == NATS_OK);
 
     test("Close commits the batch without a final message: ");
@@ -1032,7 +1019,7 @@ test_FastPublishLargeBatchStall(void)
     testCond(s == NATS_OK);
 
     test("Create fast publisher (default flow control): ");
-    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    s = jsFastPublishCtx_Create(&fp, nc, NULL);
     testCond((s == NATS_OK) && (fp != NULL));
 
     // With the default Flow=100 / MaxOutstandingAcks=2, the publisher must
@@ -1043,7 +1030,7 @@ test_FastPublishLargeBatchStall(void)
         char subj[32], body[32];
         snprintf(subj, sizeof(subj), "fbig.%d", i);
         snprintf(body, sizeof(body), "m%d", i);
-        s = jsFastPublish_Add(&fpAck, fp, nc, subj, body, (int)strlen(body), NULL);
+        s = jsFastPublish_Add(&fpAck, fp, subj, body, (int)strlen(body), NULL);
         if (s == NATS_OK)
         {
             if (fpAck.AckSequence > fpAck.BatchSequence)
@@ -1101,14 +1088,14 @@ test_FastPublishMsgHeaders(void)
     testCond(s == NATS_OK);
 
     test("Create fast publisher: ");
-    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    s = jsFastPublishCtx_Create(&fp, nc, NULL);
     testCond((s == NATS_OK) && (fp != NULL));
 
     test("Add applies TTL and ExpectedStream as headers: ");
     jsBatchMsgOpts_Init(&mo);
     mo.TTL = 60000000000LL; // 60s, in nanoseconds
     mo.ExpectedStream = "FHDR";
-    s = jsFastPublish_Add(NULL, fp, nc, "fhdr.1", "one", 3, &mo);
+    s = jsFastPublish_Add(NULL, fp, "fhdr.1", "one", 3, &mo);
     if (s == NATS_OK)
         s = natsSubscription_NextMsg(&rcv, sub, 2000);
     if (s == NATS_OK)
@@ -1164,11 +1151,11 @@ test_FastPublishCommitMsg(void)
     testCond(s == NATS_OK);
 
     test("Create fast publisher: ");
-    s = jsFastPublishCtx_Create(&fp, js, NULL);
+    s = jsFastPublishCtx_Create(&fp, nc, NULL);
     testCond((s == NATS_OK) && (fp != NULL));
 
     test("Add a message: ");
-    s = jsFastPublish_Add(NULL, fp, nc, "fcm.1", "first", 5, NULL);
+    s = jsFastPublish_Add(NULL, fp, "fcm.1", "first", 5, NULL);
     testCond(s == NATS_OK);
 
     test("CommitMsg seals the batch with a prebuilt message: ");
@@ -1231,7 +1218,7 @@ test_FastPublishRejectedBatch(void)
     jsFastPublisherOptions_Init(&opts);
     opts.ErrHandler = _fpOnErr;
     opts.ErrHandlerClosure = &ectx;
-    s = jsFastPublishCtx_Create(&fp, js, &opts);
+    s = jsFastPublishCtx_Create(&fp, nc, &opts);
     testCond((s == NATS_OK) && (fp != NULL));
 
     // The stream is empty, so asserting a last sequence of 999 must be
@@ -1242,7 +1229,7 @@ test_FastPublishRejectedBatch(void)
     jsBatchMsgOpts_Init(&mo);
     mo.HasExpectedLastSeq = true;
     mo.ExpectedLastSeq = 999;
-    jsFastPublish_Add(NULL, fp, nc, "frej.1", "x", 1, &mo);
+    jsFastPublish_Add(NULL, fp, "frej.1", "x", 1, &mo);
 
     while (waitedMs < 5000)
     {
@@ -1257,7 +1244,7 @@ test_FastPublishRejectedBatch(void)
     testCond((errCount > 0) && (jsFastPublish_IsClosed(fp) == true));
 
     test("Add after a rejected batch fails: ");
-    s = jsFastPublish_Add(NULL, fp, nc, "frej.2", "y", 1, NULL);
+    s = jsFastPublish_Add(NULL, fp, "frej.2", "y", 1, NULL);
     testCond(s != NATS_OK);
 
     pthread_mutex_destroy(&ectx.mu);

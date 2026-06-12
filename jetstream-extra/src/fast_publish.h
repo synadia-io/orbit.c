@@ -103,23 +103,23 @@ typedef struct jsBatchMsgOpts
  *  @{
  */
 
-/** \brief Asynchronous error handler invoked from the ack-handling
- * thread.
+/** \brief Callback used to notify the user of asynchronous fast-publish
+ *         errors.
  *
- * Called for server-side signals that cannot naturally surface in a
- * function return: per-message errors reported by the server, gap
- * detections under `ContinueOnGap = true`, and ack-message parse
- * failures. Errors that already cause a call to fail synchronously are
- * NOT forwarded here.
+ * This callback is used to report server-side conditions that arrive on
+ * the ack inbox, such as per-message errors, gap detections, and batch
+ * rejections. These are delivered here because they may surface after the
+ * publishing call has already returned; a condition that also closes the
+ * batch may, in addition, be observed as a non-OK return from a call
+ * blocked on the context at that time.
  *
- * The handler is invoked from the ack-handling thread with no internal
- * lock held. It must not block for long and must not call back into the
- * same #jsFastPublishCtx.
+ * \warning callback is invoked from the ack-handling thread with no
+ *          internal lock held. It must not block for long and must not
+ *          call back into the same #jsFastPublishCtx.
  *
  * @param status the underlying #natsStatus when applicable, or #NATS_ERR.
  * @param description human-readable diagnostic; valid only for the duration of the call.
- * @param closure the user-supplied pointer registered on
- *   #jsFastPublisherOptions.
+ * @param closure the user-supplied pointer registered on #jsFastPublisherOptions.
  */
 typedef void (*jsFastPublishErrHandler)(natsStatus status,
                                         const char *description,
@@ -221,23 +221,24 @@ jsBatchMsgOpts_Init(jsBatchMsgOpts *opts);
 NATS_EXTERN natsStatus
 jsFastPublisherOptions_Init(jsFastPublisherOptions *opts);
 
-/** \brief Creates a new fast-publish context bound to a JetStream context.
+/** \brief Creates a new fast-publish context bound to a connection.
  *
- * The returned context owns one in-progress batch. On success `*ctx`
- * receives a newly allocated context that must be released with
- * #jsFastPublish_Destroy.
+ * The returned context owns one in-progress batch and publishes every
+ * message in that batch on `nc`. On success `*ctx` receives a newly
+ * allocated context that must be released with #jsFastPublish_Destroy.
  *
- * `js` is borrowed and must outlive `*ctx`. `opts` is read fully during
+ * `nc` is borrowed and must outlive `*ctx`. `opts` is read fully during
  * the call and may be released immediately afterwards.
  *
  * @param ctx out-param receiving the new context.
- * @param js the JetStream context backing the batch. Must outlive `*ctx`.
+ * @param nc the connection every message in the batch is published on.
+ *   Must outlive `*ctx`.
  * @param opts optional flow-control configuration; `NULL` selects defaults.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for malformed
  *   arguments, or #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
-jsFastPublishCtx_Create(jsFastPublishCtx **ctx, jsCtx *js,
+jsFastPublishCtx_Create(jsFastPublishCtx **ctx, natsConnection *nc,
                         jsFastPublisherOptions *opts);
 
 /** \brief Adds a message to the current batch.
@@ -252,13 +253,15 @@ jsFastPublishCtx_Create(jsFastPublishCtx **ctx, jsCtx *js,
  * returns; `AckSequence` may trail `BatchSequence`. Pass `NULL` for
  * `ack` to discard this information.
  *
- * If the batch has already been closed (by commit, fatal gap, or
- * explicit close) the call fails with #NATS_ERR and the context must be
- * destroyed.
+ * If the batch has already been closed (by commit, fatal gap, explicit
+ * close, or a transport error) the call fails with #NATS_ERR and the
+ * context must be destroyed.
+ *
+ * The message is published on the connection passed to
+ * #jsFastPublishCtx_Create.
  *
  * @param ack out-param receiving the per-message ack, or `NULL`.
  * @param ctx the fast-publish context.
- * @param nc the connection to publish on. Must be the same connection used to create `ctx`.
  * @param subject subject for the message.
  * @param data payload; may be `NULL` when `dataLen` is 0.
  * @param dataLen length of `data`, in bytes.
@@ -268,7 +271,7 @@ jsFastPublishCtx_Create(jsFastPublishCtx **ctx, jsCtx *js,
  *   #natsStatus on transport or protocol error.
  */
 NATS_EXTERN natsStatus
-jsFastPublish_Add(jsFastPubAck *ack, jsFastPublishCtx *ctx, natsConnection *nc,
+jsFastPublish_Add(jsFastPubAck *ack, jsFastPublishCtx *ctx,
                   const char *subject, const void *data, int dataLen,
                   jsBatchMsgOpts *opts);
 

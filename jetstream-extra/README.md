@@ -58,17 +58,16 @@ Stream a batch of messages, then seal it with a single commit:
 #include <fast_publish.h>
 
 natsConnection   *nc;
-jsCtx            *js;
 jsFastPublishCtx *fp = NULL;
 jsPubAck         *pubAck = NULL;
 
 natsConnection_ConnectTo(&nc, "nats://localhost:4222");
-natsConnection_JetStream(&js, nc, NULL);
 
-// Stream must be created with AllowBatched = true.
+// The connection must reach a JetStream server with a stream created
+// using AllowBatched = true.
 // NULL options selects the defaults: Flow = 100, MaxOutstandingAcks = 2,
 // AckTimeout = 5000 ms.
-jsFastPublishCtx_Create(&fp, js, NULL);
+jsFastPublishCtx_Create(&fp, nc, NULL);
 
 for (int i = 1; i < 1000; i++)
 {
@@ -77,7 +76,7 @@ for (int i = 1; i < 1000; i++)
     snprintf(body, sizeof(body), "{\"order\":%d}", i);
     // Add publishes immediately and only stalls when the outstanding
     // flow-ack window is full.
-    jsFastPublish_Add(NULL, fp, nc, subj, body, (int)strlen(body), NULL);
+    jsFastPublish_Add(NULL, fp, subj, body, (int)strlen(body), NULL);
 }
 
 // Commit publishes the final message and seals the batch, blocking until
