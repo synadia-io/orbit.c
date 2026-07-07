@@ -9,7 +9,7 @@ file(GLOB SOURCES "*.c")
 if(ORBIT_BUILD_LIB_SHARED)
   add_library(nats_extra SHARED ${SOURCES})
   target_link_libraries(nats_extra PUBLIC cnats::nats)
-  target_link_libraries(nats_extra PRIVATE orbit_utils ${ORBIT_EXTRA_LIB})
+  target_link_libraries(nats_extra PRIVATE ${ORBIT_EXTRA_LIB})
   set_target_properties(nats_extra PROPERTIES
     VERSION ${NATS_EXTRA_VERSION_MAJOR}.${NATS_EXTRA_VERSION_MINOR}.${NATS_EXTRA_VERSION_PATCH}
     SOVERSION ${NATS_EXTRA_VERSION_MAJOR}.${NATS_EXTRA_VERSION_MINOR}
@@ -23,7 +23,7 @@ endif()
 if(ORBIT_BUILD_LIB_STATIC)
   add_library(nats_extra_static STATIC ${SOURCES})
   target_link_libraries(nats_extra_static PUBLIC cnats::nats_static)
-  target_link_libraries(nats_extra_static PRIVATE orbit_utils_static ${ORBIT_EXTRA_LIB})
+  target_link_libraries(nats_extra_static PRIVATE ${ORBIT_EXTRA_LIB})
   target_compile_definitions(nats_extra_static PRIVATE NATS_EXTRA_STATIC)
   set_target_properties(nats_extra_static PROPERTIES DEBUG_POSTFIX d)
   target_include_directories(nats_extra_static PUBLIC

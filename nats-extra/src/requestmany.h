@@ -96,22 +96,23 @@ natsRequestManyOpts_Init(natsRequestManyOpts *opts);
  * @param nc the NATS connection. Must be open for the duration of the call.
  * @param subj the subject to publish the request to.
  * @param data the request payload, or `NULL` for an empty body.
+ * @param dataLen the length of `data` in bytes, or 0 for an empty body.
  * @param opts the gather options (see #natsRequestManyOpts).
  * @return #NATS_OK on natural completion, #NATS_TIMEOUT if no stop condition
  * was reached (the partial result is still in `*list`), #NATS_INVALID_ARG for
  * malformed arguments, or another #natsStatus for transport errors.
  */
 natsStatus
-natsRequestMany_RequestMany(natsMsgList *list, natsConnection *nc, const char *subj,
-                            const char *data, int dataLen, natsRequestManyOpts *opts);
+natsRequestMany_Request(natsMsgList *list, natsConnection *nc, const char *subj,
+                        const char *data, int dataLen, natsRequestManyOpts *opts);
 
 /** \brief Synchronously scatters a pre-built request message and gathers the
  * replies into a list.
  *
- * Identical to #natsRequestMany_RequestMany but takes a caller-constructed
- * #natsMsg, allowing custom headers on the request. The library overwrites the
- * message's reply subject with its private inbox. Ownership of `msg` remains
- * with the caller.
+ * Identical to #natsRequestMany_Request but takes a caller-constructed
+ * #natsMsg, allowing custom headers on the request. The library publishes a
+ * copy of `msg` whose reply subject is its private inbox, leaving the caller's
+ * message untouched. Ownership of `msg` remains with the caller.
  *
  * @param list out-param populated with the received replies; unless return code is
  * #NATS_INVALID_ARG, always destroy with #natsMsgList_Destroy
@@ -123,8 +124,8 @@ natsRequestMany_RequestMany(natsMsgList *list, natsConnection *nc, const char *s
  * #natsStatus for transport errors.
  */
 natsStatus
-natsRequestMany_RequestManyMsg(natsMsgList *list, natsConnection *nc, natsMsg *msg,
-                               natsRequestManyOpts *opts);
+natsRequestMany_RequestMsg(natsMsgList *list, natsConnection *nc, natsMsg *msg,
+                           natsRequestManyOpts *opts);
 
 /** @} */ // end natsRequestManyFuncGroup
 /** @} */ // end natsRequestManyGroup

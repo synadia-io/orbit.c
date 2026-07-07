@@ -7,9 +7,9 @@ set(NATS_EXTRA_VERSION_PATCH 0)
 
 add_subdirectory(src)
 
-# if(ORBIT_BUILD_EXAMPLES)
-#   add_subdirectory(examples)
-# endif()
+if(ORBIT_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
 
 if(BUILD_TESTING)
   add_subdirectory(test)

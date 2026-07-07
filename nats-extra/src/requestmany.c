@@ -184,8 +184,8 @@ clean:
 }
 
 natsStatus
-natsRequestMany_RequestMany(natsMsgList *list, natsConnection *nc, const char *subj,
-                            const char *data, int dataLen, natsRequestManyOpts *opts)
+natsRequestMany_Request(natsMsgList *list, natsConnection *nc, const char *subj,
+                        const char *data, int dataLen, natsRequestManyOpts *opts)
 {
     if (subj == NULL)
         return NATS_INVALID_ARG;
@@ -194,8 +194,8 @@ natsRequestMany_RequestMany(natsMsgList *list, natsConnection *nc, const char *s
 }
 
 natsStatus
-natsRequestMany_RequestManyMsg(natsMsgList *list, natsConnection *nc, natsMsg *msg,
-                               natsRequestManyOpts *opts)
+natsRequestMany_RequestMsg(natsMsgList *list, natsConnection *nc, natsMsg *msg,
+                           natsRequestManyOpts *opts)
 {
     if (msg == NULL)
         return NATS_INVALID_ARG;

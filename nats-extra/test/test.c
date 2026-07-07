@@ -11,21 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// nats-extra test suite.
-//
-// Mirrors the framework used in jetstream-extra/test/test.c, but request-many
-// only needs a core NATS server, so it uses CORE_SETUP instead of JS_SETUP.
-//
-// The integration fixture mirrors orbit.go's requestmany_test.go: five
-// responders reply "hello" immediately, and a sixth replies with an empty
-// payload after a delay (the sentinel). That lets a single fixture exercise the
-// overall-timeout, stall, count, and sentinel stop conditions.
-//
-// Run a single test:
-//   ./nats_extra_testsuite RequestManyCount
-// Run all tests:
-//   ctest --test-dir build
-
 #include <nats/nats.h>
 #include "requestmany.h"
 
@@ -318,23 +303,23 @@ test_RequestManyArgs(void)
     natsRequestManyOpts_Init(&opts);
 
     test("NULL list rejected: ");
-    s = natsRequestMany_RequestMany(NULL, nc, "foo", NULL, 0, &opts);
+    s = natsRequestMany_Request(NULL, nc, "foo", NULL, 0, &opts);
     testCond(s == NATS_INVALID_ARG);
 
     test("NULL connection rejected: ");
-    s = natsRequestMany_RequestMany(&list, NULL, "foo", NULL, 0, &opts);
+    s = natsRequestMany_Request(&list, NULL, "foo", NULL, 0, &opts);
     testCond(s == NATS_INVALID_ARG);
 
     test("NULL subject rejected: ");
-    s = natsRequestMany_RequestMany(&list, nc, NULL, NULL, 0, &opts);
+    s = natsRequestMany_Request(&list, nc, NULL, NULL, 0, &opts);
     testCond(s == NATS_INVALID_ARG);
 
     test("NULL opts rejected: ");
-    s = natsRequestMany_RequestMany(&list, nc, "foo", NULL, 0, NULL);
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, NULL);
     testCond(s == NATS_INVALID_ARG);
 
     test("NULL msg rejected: ");
-    s = natsRequestMany_RequestManyMsg(&list, nc, NULL, &opts);
+    s = natsRequestMany_RequestMsg(&list, nc, NULL, &opts);
     testCond(s == NATS_INVALID_ARG);
 }
 
@@ -361,7 +346,7 @@ test_RequestManyOverallTimeout(void)
     test("Overall timeout gathers all replies: ");
     natsRequestManyOpts_Init(&opts);
     opts.timeout = 300; // must exceed the sentinel's 100ms delay
-    s = natsRequestMany_RequestMany(&list, nc, "foo", NULL, 0, &opts);
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_TIMEOUT) && (list.Count == N_RESPONDERS));
 
     natsMsgList_Destroy(&list);
@@ -388,7 +373,7 @@ test_RequestManyStall(void)
     natsRequestManyOpts_Init(&opts);
     opts.stall = 50;     // < the sentinel's 100ms delay
     opts.timeout = 5000; // large; the stall must be what ends the gather
-    s = natsRequestMany_RequestMany(&list, nc, "foo", NULL, 0, &opts);
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == N_HELLO_RESPONDERS));
 
     natsMsgList_Destroy(&list);
@@ -414,7 +399,7 @@ test_RequestManyCount(void)
     natsRequestManyOpts_Init(&opts);
     opts.count = 3;
     opts.timeout = 5000;
-    s = natsRequestMany_RequestMany(&list, nc, "foo", NULL, 0, &opts);
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == 3));
 
     natsMsgList_Destroy(&list);
@@ -441,7 +426,7 @@ test_RequestManySentinel(void)
     natsRequestManyOpts_Init(&opts);
     opts.sentinel = _emptySentinel;
     opts.timeout = 5000;
-    s = natsRequestMany_RequestMany(&list, nc, "foo", NULL, 0, &opts);
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == N_HELLO_RESPONDERS));
 
     natsMsgList_Destroy(&list);
@@ -476,7 +461,7 @@ test_RequestManyMsgHeaders(void)
     natsRequestManyOpts_Init(&opts);
     opts.count = 1;
     opts.timeout = 2000;
-    s = natsRequestMany_RequestManyMsg(&list, nc, req, &opts);
+    s = natsRequestMany_RequestMsg(&list, nc, req, &opts);
     if ((s == NATS_OK) && (list.Count == 1))
     {
         data = natsMsg_GetData(list.Msgs[0]);
