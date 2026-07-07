@@ -50,13 +50,15 @@ A **sentinel** ends the gather on a reply the caller recognises. The inspected
 message is destroyed and is not appended to the list:
 
 ```c
-static bool onReply(natsMsg *msg) {
+static bool onReply(natsMsg *msg, void *closure) {
     // e.g. stop on an empty-payload "no more responders" marker.
     return natsMsg_GetDataLength(msg) == 0;
 }
 
 natsRequestManyOpts_Init(&opts);
 opts.sentinel = onReply;
+// Optionally carry caller state into the predicate:
+// opts.sentinelClosure = &myState;
 natsRequestMany_Request(&list, nc, "help", NULL, 0, &opts);
 ```
 

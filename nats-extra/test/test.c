@@ -270,9 +270,22 @@ _echoHeaderResponder(natsConnection *nc, natsSubscription *sub, natsMsg *msg, vo
 // Sentinel predicate: an empty-payload reply ends the gather (orbit.go's
 // DefaultSentinel).
 static bool
-_emptySentinel(natsMsg *msg)
+_emptySentinel(natsMsg *msg, void *closure)
 {
+    (void)closure;
     return natsMsg_GetDataLength(msg) == 0;
+}
+
+// Echoes the request's payload back, so a gather can assert the request body
+// crossed the wire.
+static void
+_echoDataResponder(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
+{
+    (void)sub;
+    (void)closure;
+    natsConnection_Publish(nc, natsMsg_GetReply(msg),
+                           natsMsg_GetData(msg), natsMsg_GetDataLength(msg));
+    natsMsg_Destroy(msg);
 }
 
 //=============================================================================
@@ -298,6 +311,7 @@ test_RequestManyArgs(void)
              && (opts.stall == 0)
              && (opts.count == 0)
              && (opts.sentinel == NULL)
+             && (opts.sentinelClosure == NULL)
              && (opts.timeout == 0));
 
     natsRequestManyOpts_Init(&opts);
@@ -473,6 +487,96 @@ test_RequestManyMsgHeaders(void)
     natsMsg_Destroy(req);
     natsMsgList_Destroy(&list);
     natsSubscription_Destroy(sub);
+    CORE_TEARDOWN;
+}
+
+// A zero timeout selects the built-in default rather than an immediate
+// deadline: the gather must proceed and stop on the count, not time out at 0.
+void
+test_RequestManyDefaultTimeout(void)
+{
+    natsRequestManyOpts opts;
+    natsMsgList list = { 0 };
+    natsSubscription *subs[N_RESPONDERS] = { 0 };
+
+    CORE_SETUP;
+
+    test("Start responders: ");
+    s = _startResponders(nc, subs);
+    testCond(s == NATS_OK);
+
+    test("Zero timeout falls back to the default, not an immediate deadline: ");
+    natsRequestManyOpts_Init(&opts);
+    opts.count = 3;   // ends the gather
+    opts.timeout = 0; // 0 must mean "use the default", not "expire now"
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
+    testCond((s == NATS_OK) && (list.Count == 3));
+
+    natsMsgList_Destroy(&list);
+    _stopResponders(subs);
+    CORE_TEARDOWN;
+}
+
+// The request payload must reach responders: an echo responder mirrors the body
+// back, so a matching reply proves the data crossed the wire.
+void
+test_RequestManyRequestData(void)
+{
+    natsRequestManyOpts opts;
+    natsMsgList list = { 0 };
+    natsSubscription *sub = NULL;
+    const char *data = NULL;
+    int dataLen = 0;
+
+    CORE_SETUP;
+
+    test("Subscribe echo-data responder: ");
+    s = natsConnection_Subscribe(&sub, nc, "foo", _echoDataResponder, NULL);
+    testCond(s == NATS_OK);
+
+    test("Request delivers the payload to the responder: ");
+    natsRequestManyOpts_Init(&opts);
+    opts.count = 1;
+    opts.timeout = 2000;
+    s = natsRequestMany_Request(&list, nc, "foo", "ping", 4, &opts);
+    if ((s == NATS_OK) && (list.Count == 1))
+    {
+        data = natsMsg_GetData(list.Msgs[0]);
+        dataLen = natsMsg_GetDataLength(list.Msgs[0]);
+    }
+    testCond((s == NATS_OK) && (list.Count == 1) && (data != NULL)
+             && (dataLen == 4) && (memcmp(data, "ping", 4) == 0));
+
+    natsMsgList_Destroy(&list);
+    natsSubscription_Destroy(sub);
+    CORE_TEARDOWN;
+}
+
+// A count larger than the number of replies never trips: another stop condition
+// (here the stall) must end the gather with whatever arrived.
+void
+test_RequestManyCountExceedsReplies(void)
+{
+    natsRequestManyOpts opts;
+    natsMsgList list = { 0 };
+    natsSubscription *subs[N_RESPONDERS] = { 0 };
+
+    CORE_SETUP;
+
+    test("Start responders: ");
+    s = _startResponders(nc, subs);
+    testCond(s == NATS_OK);
+
+    test("Count above the reply total falls through to the stall: ");
+    natsRequestManyOpts_Init(&opts);
+    opts.count = 1000;   // far more than the responders will ever send
+    opts.stall = 50;     // < the sentinel's 100ms delay, so it ends the burst
+    opts.timeout = 5000;
+    s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
+    testCond((s == NATS_OK) && (list.Count == N_HELLO_RESPONDERS));
+
+    natsMsgList_Destroy(&list);
+    _stopResponders(subs);
     CORE_TEARDOWN;
 }
 

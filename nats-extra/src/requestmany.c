@@ -32,6 +32,7 @@ natsRequestManyOpts_Init(natsRequestManyOpts *opts)
     opts->stall = 0;
     opts->count = 0;
     opts->sentinel = NULL;
+    opts->sentinelClosure = NULL;
     opts->timeout = 0;
 
     return NATS_OK;
@@ -93,7 +94,7 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
     natsMsg *startMsg = NULL;
     natsMsg *nextMsg = NULL;
     int cap = 0;
-    int count;
+    uint64_t count;
     int64_t deadline;
     uint64_t timeout;
 
@@ -156,7 +157,7 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
             break;
         }
 
-        if (opts->sentinel != NULL && opts->sentinel(nextMsg))
+        if (opts->sentinel != NULL && opts->sentinel(nextMsg, opts->sentinelClosure))
         {
             natsMsg_Destroy(nextMsg);
             break;

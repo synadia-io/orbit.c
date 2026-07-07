@@ -53,8 +53,9 @@ _worker(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
 
 // Stop the gather on the first empty-payload reply.
 static bool
-_onReply(natsMsg *msg)
+_onReply(natsMsg *msg, void *closure)
 {
+    (void)closure;
     return natsMsg_GetDataLength(msg) == 0;
 }
 

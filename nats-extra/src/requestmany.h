@@ -43,9 +43,11 @@ extern "C"
  * message is destroyed. The sentinel does not take ownership of `msg`.
  *
  * @param msg the reply being inspected; borrowed, do not destroy.
+ * @param closure the opaque pointer set in #natsRequestManyOpts.sentinelClosure,
+ * passed through unchanged; may be `NULL`.
  * @return `true` to stop gathering after this message, `false` to continue.
  */
-typedef bool (*natsRequestManySentinel)(natsMsg *msg);
+typedef bool (*natsRequestManySentinel)(natsMsg *msg, void *closure);
 
 /** \brief Options controlling when a request-many gather terminates.
  *
@@ -56,10 +58,11 @@ typedef bool (*natsRequestManySentinel)(natsMsg *msg);
  */
 typedef struct __natsRequestManyOpts
 {
-    uint64_t                stall;    ///< Stall timer in milliseconds: stop once this long elapses with no new reply. 0 = disabled.
-    int                     count;    ///< Stop after this many replies. Unlimited if count is <= 0.
-    natsRequestManySentinel sentinel; ///< Optional predicate to stop on a caller-recognised reply. May be `NULL`.
-    uint64_t                timeout;  ///< Overall deadline in milliseconds for the entire gather, measured from when the request is sent. 0 = use a built-in default. The gather never blocks indefinitely.
+    uint64_t                stall;           ///< Stall timer in milliseconds: stop once this long elapses with no new reply. 0 = disabled.
+    uint64_t                count;           ///< Stop after this many replies. 0 = disabled (unlimited).
+    natsRequestManySentinel sentinel;        ///< Optional predicate to stop on a caller-recognised reply. May be `NULL`.
+    void                   *sentinelClosure; ///< Opaque pointer passed through to #sentinel on each call. May be `NULL`.
+    uint64_t                timeout;         ///< Overall deadline in milliseconds for the entire gather, measured from when the request is sent. 0 = use a built-in default. The gather never blocks indefinitely.
 
 } natsRequestManyOpts;
 
