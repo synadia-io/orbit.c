@@ -58,11 +58,11 @@ typedef bool (*natsRequestManySentinel)(natsMsg *msg, void *closure);
  */
 typedef struct __natsRequestManyOpts
 {
-    uint64_t                stall;           ///< Stall timer in milliseconds: stop once this long elapses with no new reply. 0 = disabled.
-    uint64_t                count;           ///< Stop after this many replies. 0 = disabled (unlimited).
-    natsRequestManySentinel sentinel;        ///< Optional predicate to stop on a caller-recognised reply. May be `NULL`.
-    void                   *sentinelClosure; ///< Opaque pointer passed through to #sentinel on each call. May be `NULL`.
-    uint64_t                timeout;         ///< Overall deadline in milliseconds for the entire gather, measured from when the request is sent. 0 = use a built-in default. The gather never blocks indefinitely.
+    uint64_t                Stall;           ///< Stall timer in milliseconds: stop once this long elapses with no new reply. 0 = disabled.
+    uint64_t                Count;           ///< Stop after this many replies. 0 = disabled (unlimited).
+    natsRequestManySentinel Sentinel;        ///< Optional predicate to stop on a caller-recognised reply. May be `NULL`.
+    void                   *SentinelClosure; ///< Opaque pointer passed through to #sentinel on each call. May be `NULL`.
+    uint64_t                Timeout;         ///< Overall deadline in milliseconds for the entire gather, measured from when the request is sent. 0 = use a built-in default. The gather never blocks indefinitely.
 
 } natsRequestManyOpts;
 

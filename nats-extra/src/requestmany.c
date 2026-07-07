@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #include "requestmany.h"
+#include "os_shims.h"
 
 #define INITIAL_LIST_CAP 16
 
@@ -29,11 +30,7 @@ natsRequestManyOpts_Init(natsRequestManyOpts *opts)
 {
     if (opts == NULL)
         return NATS_INVALID_ARG;
-    opts->stall = 0;
-    opts->count = 0;
-    opts->sentinel = NULL;
-    opts->sentinelClosure = NULL;
-    opts->timeout = 0;
+    memset(opts, 0, sizeof(natsRequestManyOpts));
 
     return NATS_OK;
 }
@@ -47,7 +44,7 @@ _listAppend(natsMsgList *list, natsMsg *msg, int *cap)
     if (list->Count == *cap)
     {
         newCap = (*cap == 0) ? INITIAL_LIST_CAP : *cap * 2;
-        p = (natsMsg **)realloc(list->Msgs, (size_t)newCap * sizeof(natsMsg *));
+        p = (natsMsg **)NATS_REALLOC(list->Msgs, (size_t)newCap * sizeof(natsMsg *));
         if (p == NULL)
             return NATS_NO_MEMORY;
 
@@ -127,8 +124,8 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
     natsMsg_Destroy(startMsg);
     startMsg = NULL;
 
-    count    = opts->count;
-    timeout  = (opts->timeout == 0) ? DEFAULT_REQUEST_MANY_TIMEOUT : opts->timeout;
+    count    = opts->Count;
+    timeout  = (opts->Timeout == 0) ? DEFAULT_REQUEST_MANY_TIMEOUT : opts->Timeout;
     deadline = _nowMs() + (int64_t)timeout;
 
     while (s == NATS_OK)
@@ -145,9 +142,9 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
         // The stall timer measures the gap since the last reply, so it only
         // applies once at least one reply has arrived. Until then the wait is
         // bounded solely by the overall deadline.
-        stallBound = (opts->stall > 0 && list->Count > 0 && (int64_t)opts->stall < leftMs);
+        stallBound = (opts->Stall > 0 && list->Count > 0 && (int64_t)opts->Stall < leftMs);
 
-        s = natsSubscription_NextMsg(&nextMsg, sub, stallBound ? (int64_t)opts->stall : leftMs);
+        s = natsSubscription_NextMsg(&nextMsg, sub, stallBound ? (int64_t)opts->Stall : leftMs);
         if (s != NATS_OK)
         {
             // A stall-window timeout is a normal completion; a deadline
@@ -157,7 +154,7 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
             break;
         }
 
-        if (opts->sentinel != NULL && opts->sentinel(nextMsg, opts->sentinelClosure))
+        if (opts->Sentinel != NULL && opts->Sentinel(nextMsg, opts->SentinelClosure))
         {
             natsMsg_Destroy(nextMsg);
             break;
@@ -188,7 +185,7 @@ natsStatus
 natsRequestMany_Request(natsMsgList *list, natsConnection *nc, const char *subj,
                         const char *data, int dataLen, natsRequestManyOpts *opts)
 {
-    if (subj == NULL)
+    if (nats_IsStringEmpty(subj))
         return NATS_INVALID_ARG;
 
     return _requestManyInternal(list, nc, NULL, subj, data, dataLen, opts);

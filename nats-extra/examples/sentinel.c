@@ -83,8 +83,8 @@ main(int argc, char **argv)
 
     // The sentinel is the stop condition; timeout is only a safety net.
     natsRequestManyOpts_Init(&opts);
-    opts.sentinel = _onReply;
-    opts.timeout  = 5000;
+    opts.Sentinel = _onReply;
+    opts.Timeout  = 5000;
 
     printf("\nSending request...\n");
     s = natsRequestMany_Request(&list, nc, SUBJECT, NULL, 0, &opts);

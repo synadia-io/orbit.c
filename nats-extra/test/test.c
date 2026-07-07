@@ -308,11 +308,11 @@ test_RequestManyArgs(void)
     memset(&opts, 0xff, sizeof(opts));
     s = natsRequestManyOpts_Init(&opts);
     testCond((s == NATS_OK)
-             && (opts.stall == 0)
-             && (opts.count == 0)
-             && (opts.sentinel == NULL)
-             && (opts.sentinelClosure == NULL)
-             && (opts.timeout == 0));
+             && (opts.Stall == 0)
+             && (opts.Count == 0)
+             && (opts.Sentinel == NULL)
+             && (opts.SentinelClosure == NULL)
+             && (opts.Timeout == 0));
 
     natsRequestManyOpts_Init(&opts);
 
@@ -359,7 +359,7 @@ test_RequestManyOverallTimeout(void)
 
     test("Overall timeout gathers all replies: ");
     natsRequestManyOpts_Init(&opts);
-    opts.timeout = 300; // must exceed the sentinel's 100ms delay
+    opts.Timeout = 300; // must exceed the sentinel's 100ms delay
     s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_TIMEOUT) && (list.Count == N_RESPONDERS));
 
@@ -385,8 +385,8 @@ test_RequestManyStall(void)
 
     test("Stall short-circuits after the burst: ");
     natsRequestManyOpts_Init(&opts);
-    opts.stall = 50;     // < the sentinel's 100ms delay
-    opts.timeout = 5000; // large; the stall must be what ends the gather
+    opts.Stall = 50;     // < the sentinel's 100ms delay
+    opts.Timeout = 5000; // large; the stall must be what ends the gather
     s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == N_HELLO_RESPONDERS));
 
@@ -411,8 +411,8 @@ test_RequestManyCount(void)
 
     test("Count cap stops early: ");
     natsRequestManyOpts_Init(&opts);
-    opts.count = 3;
-    opts.timeout = 5000;
+    opts.Count = 3;
+    opts.Timeout = 5000;
     s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == 3));
 
@@ -438,8 +438,8 @@ test_RequestManySentinel(void)
 
     test("Sentinel ends gather and is discarded: ");
     natsRequestManyOpts_Init(&opts);
-    opts.sentinel = _emptySentinel;
-    opts.timeout = 5000;
+    opts.Sentinel = _emptySentinel;
+    opts.Timeout = 5000;
     s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == N_HELLO_RESPONDERS));
 
@@ -473,8 +473,8 @@ test_RequestManyMsgHeaders(void)
 
     test("RequestManyMsg delivers the header to the responder: ");
     natsRequestManyOpts_Init(&opts);
-    opts.count = 1;
-    opts.timeout = 2000;
+    opts.Count = 1;
+    opts.Timeout = 2000;
     s = natsRequestMany_RequestMsg(&list, nc, req, &opts);
     if ((s == NATS_OK) && (list.Count == 1))
     {
@@ -507,8 +507,8 @@ test_RequestManyDefaultTimeout(void)
 
     test("Zero timeout falls back to the default, not an immediate deadline: ");
     natsRequestManyOpts_Init(&opts);
-    opts.count = 3;   // ends the gather
-    opts.timeout = 0; // 0 must mean "use the default", not "expire now"
+    opts.Count = 3;   // ends the gather
+    opts.Timeout = 0; // 0 must mean "use the default", not "expire now"
     s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == 3));
 
@@ -536,8 +536,8 @@ test_RequestManyRequestData(void)
 
     test("Request delivers the payload to the responder: ");
     natsRequestManyOpts_Init(&opts);
-    opts.count = 1;
-    opts.timeout = 2000;
+    opts.Count = 1;
+    opts.Timeout = 2000;
     s = natsRequestMany_Request(&list, nc, "foo", "ping", 4, &opts);
     if ((s == NATS_OK) && (list.Count == 1))
     {
@@ -569,9 +569,9 @@ test_RequestManyCountExceedsReplies(void)
 
     test("Count above the reply total falls through to the stall: ");
     natsRequestManyOpts_Init(&opts);
-    opts.count = 1000;   // far more than the responders will ever send
-    opts.stall = 50;     // < the sentinel's 100ms delay, so it ends the burst
-    opts.timeout = 5000;
+    opts.Count = 1000;   // far more than the responders will ever send
+    opts.Stall = 50;     // < the sentinel's 100ms delay, so it ends the burst
+    opts.Timeout = 5000;
     s = natsRequestMany_Request(&list, nc, "foo", NULL, 0, &opts);
     testCond((s == NATS_OK) && (list.Count == N_HELLO_RESPONDERS));
 

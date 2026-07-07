@@ -74,9 +74,9 @@ main(int argc, char **argv)
 
     // Scatter one request and gather the replies.
     natsRequestManyOpts_Init(&opts);
-    opts.stall   = 100;  // stop 100 ms after the last reply arrives
-    opts.count   = 10;   // ...or once 10 replies are gathered
-    opts.timeout = 5000; // ...or after 5 s overall, whichever comes first
+    opts.Stall   = 100;  // stop 100 ms after the last reply arrives
+    opts.Count   = 10;   // ...or once 10 replies are gathered
+    opts.Timeout = 5000; // ...or after 5 s overall, whichever comes first
 
     printf("\nSending request...\n");
     s = natsRequestMany_Request(&list, nc, SUBJECT, NULL, 0, &opts);

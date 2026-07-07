@@ -78,8 +78,8 @@ main(int argc, char **argv)
 
     // Single responder, so cap the gather at one reply.
     natsRequestManyOpts_Init(&opts);
-    opts.count   = 1;
-    opts.timeout = 5000;
+    opts.Count   = 1;
+    opts.Timeout = 5000;
 
     printf("\nSending request with header X-Req: orbit\n");
     s = natsRequestMany_RequestMsg(&list, nc, req, &opts);
