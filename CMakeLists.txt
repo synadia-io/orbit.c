@@ -137,4 +137,5 @@ add_compile_definitions(${ORBIT_OS} _REENTRANT)
 add_subdirectory(utils)
 add_subdirectory(jetstream-extra)
 add_subdirectory(nats-counters)
+add_subdirectory(nats-extra)
 #----------------------------

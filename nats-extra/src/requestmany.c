@@ -15,6 +15,15 @@
 
 #define INITIAL_LIST_CAP 16
 
+// Default overall deadline, in milliseconds, used when opts->timeout is 0.
+#define DEFAULT_REQUEST_MANY_TIMEOUT 5000
+
+static int64_t
+_nowMs(void)
+{
+    return nats_NowMonotonicInNanoSeconds() / 1000000;
+}
+
 natsStatus
 natsRequestManyOpts_Init(natsRequestManyOpts *opts)
 {
@@ -23,6 +32,7 @@ natsRequestManyOpts_Init(natsRequestManyOpts *opts)
     opts->stall = 0;
     opts->count = 0;
     opts->sentinel = NULL;
+    opts->timeout = 0;
 
     return NATS_OK;
 }
@@ -83,16 +93,15 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
     natsMsg *startMsg = NULL;
     natsMsg *nextMsg = NULL;
     int cap = 0;
-    natsMsgList outList;
     int count;
+    int64_t deadline;
+    uint64_t timeout;
 
     if (list == NULL || nc == NULL || opts == NULL)
         return NATS_INVALID_ARG;
 
     list->Count = 0;
     list->Msgs = NULL;
-    outList.Count = 0;
-    outList.Msgs = NULL;
 
     s = natsInbox_Create(&inbox);
     if (s != NATS_OK)
@@ -113,46 +122,62 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
 
     if (s != NATS_OK)
         goto clean;
-    s = natsConnection_PublishMsg(nc, msg);
-    natsMsg_Destroy(msg);
+    s = natsConnection_PublishMsg(nc, startMsg);
+    natsMsg_Destroy(startMsg);
+    startMsg = NULL;
 
-    count = opts->count;
+    count    = opts->count;
+    timeout  = (opts->timeout == 0) ? DEFAULT_REQUEST_MANY_TIMEOUT : opts->timeout;
+    deadline = _nowMs() + (int64_t)timeout;
+
     while (s == NATS_OK)
     {
-        s = natsSubscription_NextMsg(&nextMsg, sub, opts->stall == 0 ? 10000 : opts->stall);
-        if (s != NATS_OK)
+        int64_t leftMs = deadline - _nowMs();
+        bool    stallBound;
+
+        if (leftMs <= 0)
         {
-            if (s == NATS_TIMEOUT)
-            {
-                s = NATS_OK;
-                if (opts->stall == 0)
-                    continue;
-                else
-                    break;
-            }
+            s = NATS_TIMEOUT;
             break;
         }
 
-        s = _listAppend(&outList, nextMsg, &cap);
+        // The stall timer measures the gap since the last reply, so it only
+        // applies once at least one reply has arrived. Until then the wait is
+        // bounded solely by the overall deadline.
+        stallBound = (opts->stall > 0 && list->Count > 0 && (int64_t)opts->stall < leftMs);
+
+        s = natsSubscription_NextMsg(&nextMsg, sub, stallBound ? (int64_t)opts->stall : leftMs);
+        if (s != NATS_OK)
+        {
+            // A stall-window timeout is a normal completion; a deadline
+            // timeout means no stop condition was reached.
+            if (s == NATS_TIMEOUT)
+                s = stallBound ? NATS_OK : NATS_TIMEOUT;
+            break;
+        }
+
+        if (opts->sentinel != NULL && opts->sentinel(nextMsg))
+        {
+            natsMsg_Destroy(nextMsg);
+            break;
+        }
+        s = _listAppend(list, nextMsg, &cap);
         if (s != NATS_OK)
         {
             natsMsg_Destroy(nextMsg);
             break;
         }
 
-        if (opts->sentinel != NULL && opts->sentinel(nextMsg))
-            break;
-
-        if (count > 0) {
+        if (count > 0)
+        {
             count--;
             if (count == 0)
                 break;
         }
     }
-    list->Count = outList.Count;
-    list->Msgs = outList.Msgs;
 
 clean:
+    natsMsg_Destroy(startMsg);
     natsSubscription_Destroy(sub);
     natsInbox_Destroy(inbox);
     return s;
@@ -162,6 +187,9 @@ natsStatus
 natsRequestMany_RequestMany(natsMsgList *list, natsConnection *nc, const char *subj,
                             const char *data, int dataLen, natsRequestManyOpts *opts)
 {
+    if (subj == NULL)
+        return NATS_INVALID_ARG;
+
     return _requestManyInternal(list, nc, NULL, subj, data, dataLen, opts);
 }
 
@@ -172,60 +200,5 @@ natsRequestMany_RequestManyMsg(natsMsgList *list, natsConnection *nc, natsMsg *m
     if (msg == NULL)
         return NATS_INVALID_ARG;
 
-    return natsRequestMany_RequestMany(list, nc, natsMsg_GetSubject(msg), natsMsg_GetData(msg),
-                                       natsMsg_GetDataLength(msg), opts);
-}
-
-typedef struct _natsRequestManyCtx {
-    natsMsgHandler                 userMsgCB;
-    natsRequestManyCompleteHandler userDoneCB;
-    void                           *userClosure;
-    natsRequestManyOpts            *opts;
-
-} natsRequestManyCtx;
-
-void _requestManyMsgCb(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *ctx)
-{
-    natsRequestManyCtx *rctx = (natsRequestManyCtx *) ctx;
-    if (rctx->opts->sentinel != NULL && rctx->opts->sentinel(msg))
-    {
-        if (rctx->userDoneCB != NULL)
-            rctx->userDoneCB(NATS_OK, rctx->userClosure);
-        return;
-    }
-
-    if (rctx->userMsgCB != NULL)
-        rctx->userMsgCB(nc, sub, msg, rctx->userClosure);
-}
-
-void _requestManyDoneCb(natsStatus s, void *ctx)
-{
-    natsRequestManyCtx *rctx = (natsRequestManyCtx *) ctx;
-    if (rctx->userDoneCB != NULL)
-        rctx->userDoneCB(s, rctx->userClosure);
-}
-
-natsStatus
-natsRequestMany_RequestManyAsync(natsConnection *nc, const char *subj, const char *data, int dataLen,
-                                 natsRequestManyOpts *opts, natsMsgHandler msgCB,
-                                 natsRequestManyCompleteHandler doneCB, void *closure)
-{
-    natsStatus s = NATS_OK;
-    natsMsg *msg = NULL;
-
-    s = natsMsg_Create(&msg, subj, NULL, data, dataLen);
-    if (s != NATS_OK)
-        return s;
-    return natsRequestMany_RequestManyMsgAsync(nc, msg, opts, msgCB, doneCB, closure);
-}
-
-natsStatus
-natsRequestMany_RequestManyMsgAsync(natsConnection *nc, natsMsg *msg,
-                                    natsRequestManyOpts *opts, natsMsgHandler msgCB,
-                                    natsRequestManyCompleteHandler doneCB, void *closure)
-{
-    if (nc == NULL || msg == NULL || opts == NULL || msgCB == NULL)
-        return NATS_INVALID_ARG;
-
-    return NATS_OK;
+    return _requestManyInternal(list, nc, msg, NULL, NULL, 0, opts);
 }
