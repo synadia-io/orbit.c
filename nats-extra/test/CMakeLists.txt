@@ -34,18 +34,18 @@ endif()
 foreach(name ${TEST_NAMES})
   # Remove the _test() prefix
   string(REGEX REPLACE "_test\\(([^)]+)\\)" "\\1" TEST_NAME ${name})
-  add_test(NAME jsx_${TEST_NAME}
+  add_test(NAME nex_${TEST_NAME}
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
     COMMAND nats_extra_testsuite ${TEST_NAME})
 
   # Make sure the test passes
-  set_tests_properties(jsx_${TEST_NAME} PROPERTIES PASS_REGULAR_EXPRESSION "ALL PASSED")
+  set_tests_properties(nex_${TEST_NAME} PROPERTIES PASS_REGULAR_EXPRESSION "ALL PASSED")
 
   # Set TSAN_OPTIONS for the test
   if(ORBIT_SANITIZE)
-    set_tests_properties(jsx_${TEST_NAME} PROPERTIES
+    set_tests_properties(nex_${TEST_NAME} PROPERTIES
       ENVIRONMENT "TSAN_OPTIONS=detect_deadlocks=1:second_deadlock_stack=1:halt_on_error=1:report_signal_unsafe=1")
   endif(ORBIT_SANITIZE)
 
-  set_tests_properties(jsx_${TEST_NAME} PROPERTIES LABELS "test")
+  set_tests_properties(nex_${TEST_NAME} PROPERTIES LABELS "test")
 endforeach()

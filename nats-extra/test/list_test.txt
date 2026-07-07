@@ -1,0 +1,6 @@
+_test(RequestManyArgs)
+_test(RequestManyOverallTimeout)
+_test(RequestManyStall)
+_test(RequestManyCount)
+_test(RequestManySentinel)
+_test(RequestManyMsgHeaders)
