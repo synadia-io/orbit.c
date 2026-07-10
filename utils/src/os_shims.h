@@ -36,6 +36,7 @@ extern "C"
 #define NATS_MALLOC(s)      malloc((s))
 #define NATS_CALLOC(c,s)    calloc((c), (s))
 #define NATS_REALLOC(p, s)  realloc((p), (s))
+#define NATS_FREE(p)        free((p))
 
 #define nats_IsStringEmpty(s) ((((s) == NULL) || ((s)[0] == '\0')) ? true : false)
 
