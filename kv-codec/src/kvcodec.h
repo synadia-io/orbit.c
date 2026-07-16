@@ -123,7 +123,8 @@ kvCodec_FreeBuf(void *buf);
  * and filter encode).
  *
  * On success, set `*out` to a NUL-terminated string allocated with
- * #kvCodec_AllocBuf and return #NATS_OK. The library takes ownership of
+ * #kvCodec_AllocBuf and return #NATS_OK; `*out` must never be `NULL` (an
+ * empty result is the 1-byte string `""`). The library takes ownership of
  * `*out` and releases it. On failure return any status other than #NATS_OK;
  * it is propagated verbatim to the caller of the triggering kvCodec call.
  *

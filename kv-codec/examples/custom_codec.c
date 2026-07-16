@@ -104,7 +104,11 @@ main(int argc, char **argv)
     s = kvCodec_Watch(&w, c, "orders.*", NULL);
     printf("  -> %s (expected NATS_INVALID_SUBJECT)\n", natsStatus_GetText(s));
     if (s != NATS_INVALID_SUBJECT)
+    {
+        if (s == NATS_OK)
+            s = NATS_ERR; // the watch was expected to fail
         goto done;
+    }
 
     printf("Watching the exact key \"orders.neworder\" instead...\n");
     s = kvCodec_Watch(&w, c, "orders.neworder", NULL);

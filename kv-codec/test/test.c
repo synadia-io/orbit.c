@@ -343,6 +343,17 @@ _errTransform(char **out, const char *in, void *closure)
     return ERR_CODEC_STATUS;
 }
 
+// Key codec that (illegally) returns NATS_OK with *out left NULL — the
+// kvKeyTransformF contract requires a non-NULL string.
+static natsStatus
+_nullKeyTransform(char **out, const char *in, void *closure)
+{
+    (void)in;
+    (void)closure;
+    *out = NULL;
+    return NATS_OK;
+}
+
 // Uppercase key codec (not filterable): used to prove wildcard rejection.
 static natsStatus
 _upperEncode(char **out, const char *in, void *closure)
@@ -948,6 +959,48 @@ test_ChainEmptyIntermediate(void)
     kvValueCodec_Destroy(chain);
     kvValueCodec_Destroy(prefixer);
     kvValueCodec_Destroy(empties);
+}
+
+void
+test_ChainNullIntermediate(void)
+{
+    kvKeyCodec *nullKc = NULL;
+    kvKeyCodec *b64    = NULL;
+    kvKeyCodec *chain  = NULL;
+    kvKeyCodec *members[2];
+    natsStatus  s;
+    char       *out = NULL;
+
+    test("Setup: ");
+    s = kvKeyCodec_New(&nullKc, _nullKeyTransform, _nullKeyTransform, NULL, NULL, NULL);
+    if (s == NATS_OK)
+        s = kvKeyCodec_Base64(&b64);
+    testCond(s == NATS_OK);
+
+    // A key stage returning NATS_OK with *out == NULL violates the
+    // kvKeyTransformF contract; the chain must fail instead of handing NULL
+    // to the next member.
+    test("NULL key intermediate fails cleanly: ");
+    members[0] = nullKc;
+    members[1] = b64;
+    s          = kvKeyCodec_Chain(&chain, members, 2);
+    if (s == NATS_OK)
+        s = kvcodec_encodeKey(&out, chain, "test");
+    testCond((s == NATS_ERR) && (out == NULL));
+    kvKeyCodec_Destroy(chain);
+    chain = NULL;
+
+    test("NULL output from the last member fails too: ");
+    members[0] = b64;
+    members[1] = nullKc;
+    s          = kvKeyCodec_Chain(&chain, members, 2);
+    if (s == NATS_OK)
+        s = kvcodec_encodeKey(&out, chain, "test");
+    testCond((s == NATS_ERR) && (out == NULL));
+
+    kvKeyCodec_Destroy(chain);
+    kvKeyCodec_Destroy(b64);
+    kvKeyCodec_Destroy(nullKc);
 }
 
 //=============================================================================

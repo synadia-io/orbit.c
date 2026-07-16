@@ -45,9 +45,6 @@ _keyChainTransform(char **out, const char *in, kvKeyChain *chain, bool decode, b
     for (i = 0; i < chain->count; i++)
     {
         kvKeyCodec *kc = chain->codecs[decode ? (chain->count - 1 - i) : i];
-        // Feed the original input only on the first iteration: a stage may
-        // legitimately produce NULL for an empty result, so cur is not a
-        // usable "first iteration" sentinel.
         const char *src  = (i == 0) ? in : cur;
         char       *next = NULL;
 
@@ -60,6 +57,9 @@ _keyChainTransform(char **out, const char *in, kvKeyChain *chain, bool decode, b
         NATS_FREE(cur);
         if (s != NATS_OK)
             return s;
+
+        if (next == NULL)
+            return NATS_ERR;
         cur = next;
     }
     *out = cur;

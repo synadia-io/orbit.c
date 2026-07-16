@@ -110,7 +110,9 @@ kvKeyCodec_Chain(&chainC, members, 2);
 ```
 
 A chain borrows its members (destroy them after the chain) and is filterable
-only if every member is.
+only if every member is. Unlike orbit.go — where a chain with a non-filterable
+member rejects every watch/list pattern — only wildcard patterns are rejected;
+wildcard-free patterns still work, encoded as plain keys.
 
 ## Custom codecs
 
