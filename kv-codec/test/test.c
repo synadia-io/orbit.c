@@ -269,7 +269,7 @@ _makeUniqueDir(char *buf, int bufLen, const char *prefix)
 // Custom codec helpers used by the unit tests.
 
 // Prefix codec: encode prepends "<prefix>:", decode strips it (and errors if
-// the prefix is missing) — mirrors the ordering test in orbit.go.
+// the prefix is missing)
 static natsStatus
 _prefixEncode(char **out, const char *in, void *closure)
 {
@@ -536,7 +536,6 @@ test_Base64DecodeInvalid(void)
 void
 test_PathCodecTable(void)
 {
-    // Encode/decode table from orbit.go's TestPathCodec.
     static const struct
     {
         const char *input;
@@ -619,7 +618,6 @@ test_NoOpCodec(void)
 void
 test_EncodeFilterBase64(void)
 {
-    // Filter vectors from orbit.go's TestEncodeFilter.
     static const struct
     {
         const char *filter;

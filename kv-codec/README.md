@@ -1,8 +1,7 @@
 # KV Codec
 
 Transparent key and value encoding for JetStream KeyValue buckets, on top of
-[cnats](https://github.com/nats-io/nats.c). A port of
-[orbit.go/kvcodec](https://github.com/synadia-io/orbit.go/tree/main/kvcodec).
+[cnats](https://github.com/nats-io/nats.c)
 
 A `kvCodec` wraps an existing `kvStore` and runs every key and/or value through
 a pluggable codec on the way in and out. Use it to:

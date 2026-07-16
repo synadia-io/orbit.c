@@ -19,10 +19,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-// URL-safe alphabet, no padding (RFC 4648 section 5), matching Go's
-// base64.RawURLEncoding used by orbit.go/kvcodec. Like Go's (non-Strict)
-// decoder, non-canonical trailing bits in the final group are accepted;
-// unlike Go, embedded '\r'/'\n' are rejected rather than skipped.
+// URL-safe alphabet, no padding (RFC 4648 section 5).
+// Non-canonical trailing bits in the final group are accepted;
+// unlike orbit.go, embedded '\r'/'\n' are rejected rather than skipped.
 static const char _b64Chars[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
