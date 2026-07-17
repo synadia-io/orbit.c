@@ -352,10 +352,11 @@ kvValueCodec_Destroy(kvValueCodec *codec);
 
 /** \brief Creates a codec-enabled wrapper around an existing #kvStore.
  *
- * The wrapper borrows all three objects: `kv`, `keyCodec` and `valueCodec`
- * must outlive the wrapper AND any watcher created from it, and are NOT
- * destroyed by #kvCodec_Destroy. Either codec may be `NULL`, meaning
+ * The wrapper borrows all three objects. Either codec may be `NULL`, meaning
  * passthrough for that dimension.
+ *
+ * \warning `kv`, `keyCodec` and `valueCodec` must outlive the wrapper
+ * AND any watcher created from it, and are NOT destroyed by #kvCodec_Destroy
  *
  * @param newCodec out-param: the new wrapper; destroy with #kvCodec_Destroy.
  * @param kv the underlying store; cannot be `NULL`; borrowed.

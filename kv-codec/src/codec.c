@@ -188,6 +188,8 @@ kvcodec_encodeFilter(char **out, kvKeyCodec *kc, const char *filter)
         return kc->encodeFilter(out, filter, kc->closure);
 
     // Not filterable: reject wildcard patterns, encode the rest as plain keys.
+    // Character match, not a token check, so a literal like "foo*" is over-
+    // rejected; kept deliberately for parity with orbit.go (kv.go uses Contains).
     if (strpbrk(filter, "*>") != NULL)
         return NATS_INVALID_SUBJECT;
     return kc->encodeKey(out, filter, kc->closure);
