@@ -195,8 +195,6 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
     natsConnection_Destroy(nc); \
     _stopServer(pid);
 
-// Responder fixture — mirrors orbit.go's requestmany_test.go.
-
 #define N_HELLO_RESPONDERS 5
 #define N_RESPONDERS       (N_HELLO_RESPONDERS + 1) // + sentinel
 
@@ -267,8 +265,6 @@ _echoHeaderResponder(natsConnection *nc, natsSubscription *sub, natsMsg *msg, vo
     natsMsg_Destroy(msg);
 }
 
-// Sentinel predicate: an empty-payload reply ends the gather (orbit.go's
-// DefaultSentinel).
 static bool
 _emptySentinel(natsMsg *msg, void *closure)
 {
