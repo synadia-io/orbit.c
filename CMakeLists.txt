@@ -139,4 +139,5 @@ add_subdirectory(jetstream-extra)
 add_subdirectory(kv-codec)
 add_subdirectory(nats-counters)
 add_subdirectory(nats-extra)
+add_subdirectory(nats-context)
 #----------------------------

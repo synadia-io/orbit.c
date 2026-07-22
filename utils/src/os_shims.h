@@ -36,9 +36,30 @@ extern "C"
 #define NATS_MALLOC(s)      malloc((s))
 #define NATS_CALLOC(c,s)    calloc((c), (s))
 #define NATS_REALLOC(p, s)  realloc((p), (s))
+#ifdef _WIN32
+#define NATS_STRDUP(s)      _strdup((s))
+#else
+#define NATS_STRDUP(s)      strdup((s))
+#endif
 #define NATS_FREE(p)        free((p))
 
+#if defined(_WIN32)
+#define NATS_PATH_SEP '\\'
+#else
+#define NATS_PATH_SEP '/'
+#endif
+
 #define nats_IsStringEmpty(s) ((((s) == NULL) || ((s)[0] == '\0')) ? true : false)
+
+// Returns the current user's home directory as an allocated string.
+natsStatus natsSys_GetHomeDir(char **homeDir);
+
+// Reports whether 'c' is a path separator on the current platform.
+bool natsSys_IsPathSep(char c);
+
+// Reports whether 'path' is absolute, following the current platform's rules
+// (mirrors Go's filepath.IsAbs).
+bool natsSys_IsAbsPath(const char *path);
 
 natsStatus natsMutex_Create(natsMutex **newMutex);
 bool       natsMutex_TryLock(natsMutex *m);
