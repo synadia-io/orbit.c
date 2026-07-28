@@ -61,6 +61,18 @@ bool natsSys_IsPathSep(char c);
 // (mirrors Go's filepath.IsAbs).
 bool natsSys_IsAbsPath(const char *path);
 
+// Runs a program without going through a shell and captures its combined
+// stdout and stderr, mirroring Go's exec.Command(...).CombinedOutput().
+// 'args' is a NULL-terminated argument vector whose first entry names the
+// program; it is looked up in the user's PATH when it holds no path separator.
+//
+// On NATS_OK *out is the NUL-terminated output, owned by the caller, and
+// *exitCode is the program's exit status: a program that ran and failed is
+// reported there rather than as an error status. Returns NATS_NOT_FOUND when
+// the program is not on the PATH, NATS_ERR when it cannot be started or dies
+// on a signal.
+natsStatus natsSys_RunCommand(const char *const *args, char **out, int *exitCode);
+
 natsStatus natsMutex_Create(natsMutex **newMutex);
 bool       natsMutex_TryLock(natsMutex *m);
 void       natsMutex_Lock(natsMutex *m);

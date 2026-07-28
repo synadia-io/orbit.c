@@ -286,6 +286,45 @@ _writeContext(const char *base, const char *name, const char *json)
     return _writeFile(path, json);
 }
 
+// Writes an executable <base>/bin/<name> holding 'script' and puts that
+// directory first on PATH, so a child process finds it ahead of any real one.
+static bool
+_writeFakeExe(const char *base, const char *name, const char *script)
+{
+    char        dir[1024];
+    char        path[1100];
+    char        pathEnv[4096];
+    const char *current = getenv("PATH");
+
+    snprintf(dir, sizeof(dir), "%s/bin", base);
+    if (!_mkdirOk(dir))
+        return false;
+
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (!_writeFile(path, script) || (chmod(path, 0755) != 0))
+        return false;
+
+    snprintf(pathEnv, sizeof(pathEnv), "%s:%s", dir, (current != NULL) ? current : "");
+    return (setenv("PATH", pathEnv, 1) == 0);
+}
+
+// Reads at most 'outLen'-1 bytes of the file at 'path' into 'out'. Returns
+// false when the file does not exist.
+static bool
+_readFile(const char *path, char *out, size_t outLen)
+{
+    FILE  *f = fopen(path, "rb");
+    size_t n;
+
+    if (f == NULL)
+        return false;
+
+    n      = fread(out, 1, outLen - 1, f);
+    out[n] = '\0';
+    fclose(f);
+    return true;
+}
+
 // Writes <base>/nats/context.txt naming the selected context.
 static bool
 _writeSelected(const char *base, const char *name)
@@ -584,9 +623,441 @@ test_unknown_context(void)
     testCond(_makeConfigTree(base, sizeof(base)));
 
     // No context file written for this name.
-    test("Unknown context is rejected: ");
+    test("Unknown context is NATS_NOT_FOUND: ");
     s = natsContext_Connect(&nc, &settings, name, NULL);
-    testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
+    testCond((s == NATS_NOT_FOUND) && (nc == NULL) && (settings == NULL));
+
+    _cleanup(settings, nc, NATS_INVALID_PID, base);
+}
+
+void
+test_invalid_name(void)
+{
+    natsStatus           s;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 dotdot[] = "../evil";
+    char                 sep[]    = "sub/ctx";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Name with '..' is NATS_INVALID_ARG: ");
+    s = natsContext_Connect(&nc, &settings, dotdot, NULL);
+    testCond((s == NATS_INVALID_ARG) && (nc == NULL) && (settings == NULL));
+
+    test("Name with a separator is NATS_INVALID_ARG: ");
+    s = natsContext_Connect(&nc, &settings, sep, NULL);
+    testCond((s == NATS_INVALID_ARG) && (nc == NULL) && (settings == NULL));
+
+    _cleanup(settings, nc, NATS_INVALID_PID, base);
+}
+
+void
+test_connect_null_name(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+
+    // Regression: a NULL name must behave like "" (selected context), not
+    // crash in strdup.
+    test("Setup empty config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Start default server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Connect with NULL name: ");
+    s = natsContext_Connect(&nc, &settings, NULL, NULL);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_connect_multi_server(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 name[] = "multi";
+    // One live server, one dead entry, plus whitespace/empty entries that
+    // the splitter must skip.
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL ", ,nats://127.0.0.1:9999,\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "multi", json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Connect with comma-separated URL list: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    test("Settings return the URL list verbatim: ");
+    testCond((settings != NULL) && (settings->URL != NULL) &&
+             (strchr(settings->URL, ',') != NULL));
+
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_connect_with_caller_opts(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    natsOptions         *opts = NULL;
+    char                 base[256];
+    char                 name[] = "withopts";
+    const char          *json = "{ \"url\": \"" SERVER_URL "\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "withopts", json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Create caller options: ");
+    s = natsOptions_Create(&opts);
+    if (s == NATS_OK)
+        s = natsOptions_SetName(opts, "orbit-ctx-test");
+    testCond(s == NATS_OK);
+
+    test("Connect with caller-supplied opts: ");
+    s = natsContext_Connect(&nc, &settings, name, opts);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    // The opts object is borrowed: it remains the caller's to destroy, and
+    // destroying it must not affect the live connection.
+    test("Caller still owns opts: ");
+    natsOptions_Destroy(opts);
+    testCond(natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED);
+
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_connect_expansion(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 envName[]   = "expandenv";
+    char                 tildeName[] = "expandtilde";
+    // User/password win the auth precedence, so the creds file is never
+    // opened — the test only observes the expansion in the returned settings.
+    const char          *envJson =
+        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\", \"password\": \"testpass\","
+        " \"creds\": \"$ORBIT_TEST_CREDS_DIR/user.creds\" }";
+    const char          *tildeJson =
+        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\", \"password\": \"testpass\","
+        " \"creds\": \"~/user.creds\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context files: ");
+    setenv("ORBIT_TEST_CREDS_DIR", "/tmp/orbit-test-creds", 1);
+    testCond(_writeContext(base, "expandenv", envJson) &&
+             _writeContext(base, "expandtilde", tildeJson));
+
+    test("Start auth server: ");
+    pid = _startServer(SERVER_URL, "--user testuser --pass testpass", false);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Server ready: ");
+    testCond(_checkStart("nats://testuser:testpass@127.0.0.1:4222", 20) == NATS_OK);
+
+    test("Creds is env-expanded in settings: ");
+    s = natsContext_Connect(&nc, &settings, envName, NULL);
+    testCond((s == NATS_OK) && (settings != NULL) && (settings->Creds != NULL) &&
+             (strcmp(settings->Creds, "/tmp/orbit-test-creds/user.creds") == 0));
+
+    natsContextSettings_Destroy(settings);
+    natsConnection_Destroy(nc);
+    settings = NULL;
+    nc       = NULL;
+
+    // Tilde expansion happens only when the creds path is turned into a
+    // connection option, never in the returned settings (orbit.go parity).
+    test("Creds is not tilde-expanded in settings: ");
+    s = natsContext_Connect(&nc, &settings, tildeName, NULL);
+    testCond((s == NATS_OK) && (settings != NULL) && (settings->Creds != NULL) &&
+             (settings->Creds[0] == '~'));
+
+    unsetenv("ORBIT_TEST_CREDS_DIR");
+    _cleanup(settings, nc, pid, base);
+}
+
+static char g_lastRequestReply[256];
+
+static void
+_echoCb(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
+{
+    const char *reply = natsMsg_GetReply(msg);
+
+    (void) sub;
+    (void) closure;
+
+    if (reply != NULL)
+    {
+        snprintf(g_lastRequestReply, sizeof(g_lastRequestReply), "%s", reply);
+        natsConnection_PublishString(nc, reply, "ok");
+    }
+    natsMsg_Destroy(msg);
+}
+
+void
+test_connect_inbox_prefix(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    natsSubscription    *sub = NULL;
+    natsMsg             *reply = NULL;
+    char                 base[256];
+    char                 name[] = "inbox";
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"inbox_prefix\": \"_CTXINBOX\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "inbox", json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Connect: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    test("Request uses the custom inbox prefix: ");
+    g_lastRequestReply[0] = '\0';
+    s = natsConnection_Subscribe(&sub, nc, "ctx.echo", _echoCb, NULL);
+    if (s == NATS_OK)
+        s = natsConnection_RequestString(&reply, nc, "ctx.echo", "hi", 2000);
+    testCond((s == NATS_OK) &&
+             (strncmp(g_lastRequestReply, "_CTXINBOX.", 10) == 0));
+
+    natsMsg_Destroy(reply);
+    natsSubscription_Destroy(sub);
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_connect_null_json_fields(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 name[] = "nulls";
+    // JSON null must read as "absent", like Go's encoding/json.
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"user\": null, \"password\": null,"
+        " \"tls_first\": null, \"windows_ca_certs_match\": null }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "nulls", json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Connect with null JSON fields: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    test("Null fields left at defaults: ");
+    testCond((settings != NULL) && (settings->User == NULL) &&
+             (settings->TLSFirst == false) &&
+             (settings->WinCertStoreCaMatch == NULL));
+
+    _cleanup(settings, nc, pid, base);
+}
+
+// A context holding `nsc` is resolved by running `nsc generate profile <value>`.
+// The tests below stand a fake `nsc` up on PATH: the real one is not needed, and
+// the script records how it was invoked so the arguments can be checked.
+
+#define NSC_LOOKUP "nsc://operator/account/user"
+
+// Records its arguments in $XDG_CONFIG_HOME/nsc_args and prints a profile.
+static const char *fakeNscOk =
+    "#!/bin/sh\n"
+    "echo \"$@\" > \"$XDG_CONFIG_HOME/nsc_args\"\n"
+    "echo '{\"user_creds\":\"/tmp/fake.creds\",\"operator\":{\"service\":"
+    "[\"nats://127.0.0.1:4222\",\"nats://127.0.0.1:4223\"]}}'\n";
+
+void
+test_connect_nsc_lookup(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 argsPath[1024];
+    char                 args[256] = {0};
+    char                 name[] = "nscctx";
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Install fake nsc: ");
+    testCond(_writeFakeExe(base, "nsc", fakeNscOk));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "nscctx", json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("nsc context connects: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    test("nsc value parsed into settings: ");
+    testCond((settings != NULL) && (settings->NSCLookup != NULL) &&
+             (strcmp(settings->NSCLookup, NSC_LOOKUP) == 0));
+
+    // The lookup value must reach nsc as a single argument, not as text pasted
+    // into a shell command line.
+    test("nsc invoked with the lookup: ");
+    snprintf(argsPath, sizeof(argsPath), "%s/nsc_args", base);
+    testCond(_readFile(argsPath, args, sizeof(args)) &&
+             (strcmp(args, "generate profile " NSC_LOOKUP "\n") == 0));
+
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_nsc_not_found(void)
+{
+    natsStatus           s;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 emptyDir[1024];
+    char                 name[] = "nscctx";
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "nscctx", json));
+
+    // No server is started: the lookup fails before any connection is made.
+    test("Empty PATH: ");
+    snprintf(emptyDir, sizeof(emptyDir), "%s/bin", base);
+    testCond(_mkdirOk(emptyDir) && (setenv("PATH", emptyDir, 1) == 0));
+
+    test("nsc not on PATH reported: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_NOT_FOUND) && (nc == NULL) && (settings == NULL));
+
+    _cleanup(settings, nc, NATS_INVALID_PID, base);
+}
+
+void
+test_nsc_invoke_failed(void)
+{
+    natsStatus           s;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 name[] = "nscctx";
+    const char          *script = "#!/bin/sh\necho 'nsc: no such account' >&2\nexit 1\n";
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Install failing nsc: ");
+    testCond(_writeFakeExe(base, "nsc", script));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "nscctx", json));
+
+    test("Failed nsc invocation reported: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_ERR) && (nc == NULL) && (settings == NULL));
+
+    _cleanup(settings, nc, NATS_INVALID_PID, base);
+}
+
+void
+test_nsc_bad_output(void)
+{
+    natsStatus           s;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 name[] = "nscctx";
+    const char          *script = "#!/bin/sh\necho 'not json'\n";
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Install babbling nsc: ");
+    testCond(_writeFakeExe(base, "nsc", script));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "nscctx", json));
+
+    test("Unparsable nsc output reported: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_ERR) && (nc == NULL) && (settings == NULL));
 
     _cleanup(settings, nc, NATS_INVALID_PID, base);
 }

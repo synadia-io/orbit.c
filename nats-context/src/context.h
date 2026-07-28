@@ -21,52 +21,100 @@
 extern "C" {
 #endif
 
+/** \defgroup natsContextGroup NATS Context
+ *
+ * Connect to NATS using a context created by the `nats` Command Line Tool
+ * @{
+ */
+
 /** \brief Settings of a NATS Context, as stored by the `nats` CLI in
  * `<config>/nats/context/<name>.json`.
  *
- * Mirrors the Settings struct of orbit.go's natscontext package. Each field
- * is annotated with the JSON key it is read from; `nscUrl` and `nscCreds`
- * are not part of the JSON file but are resolved by invoking `nsc` when
- * #NSCLookup is set.
+ *
+ * A string field is `NULL` when its key is absent from (or `null` in) the
+ * JSON file, and an empty string when present but empty — the `nats` CLI
+ * writes every key, so expect the latter. Treat `NULL` and `""` the same.
+ *
+ * The JetStream fields, #UserJwt and #ColorScheme are informational only:
+ * they are returned for the caller to consume (e.g. set `jsOptions.Domain`
+ * from #JSDomain) and are not applied to the connection.
  */
 typedef struct __natsContextSettings
 {
-    char *Name;                ///< JSON `name`.
-    char *Description;         ///< JSON `description`.
-    char *URL;                 ///< JSON `url`. Server URL(s), comma separated.
-    char *nscUrl;              ///< Operator service URL(s) resolved via `nsc`.
-    char *SocksProxy;          ///< JSON `socks_proxy`.
-    char *Token;               ///< JSON `token`.
-    char *User;                ///< JSON `user`.
-    char *Password;            ///< JSON `password`.
-    char *Creds;               ///< JSON `creds`. Path to a credentials file.
-    char *nscCreds;            ///< Credentials path resolved via `nsc`.
-    char *NKey;                ///< JSON `nkey`. Path to an nkey seed file.
-    char *Cert;                ///< JSON `cert`. Path to a client certificate.
-    char *Key;                 ///< JSON `key`. Path to a client key.
-    char *CA;                  ///< JSON `ca`. Path to a CA bundle.
-    char *NSCLookup;           ///< JSON `nsc`. `nsc` lookup, e.g. `nsc://operator/account/user`.
-    char *JSDomain;            ///< JSON `jetstream_domain`.
-    char *JSAPIPrefix;         ///< JSON `jetstream_api_prefix`.
-    char *JSEventPrefix;       ///< JSON `jetstream_event_prefix`.
-    char *InboxPrefix;         ///< JSON `inbox_prefix`.
-    char *UserJwt;             ///< JSON `user_jwt`.
-    char *ColorScheme;         ///< JSON `color_scheme`. Used by the CLI only.
-    bool  TLSFirst;            ///< JSON `tls_first`.
-    char *WinCertStoreType;    ///< JSON `windows_cert_store`.
-    char *WinCertStoreMatchBy; ///< JSON `windows_cert_match_by`.
-    char *WinCertStoreMatch;   ///< JSON `windows_cert_match`.
-    char **WinCertStoreCaMatch;  ///< JSON `windows_ca_certs_match`.
-    int   WinCertStoreCaMatchLen; ///< Number of entries in #WinCertStoreCaMatch.
+    char *Name;
+    char *Description;
+    char *URL;
+    char *SocksProxy;
+    char *Token;
+    char *User;
+    char *Password;
+    char *Creds;
+    char *NKey;
+    char *Cert;
+    char *Key;
+    char *CA;
+    char *NSCLookup;
+    char *JSDomain;
+    char *JSAPIPrefix;
+    char *JSEventPrefix;
+    char *InboxPrefix;
+    char *UserJwt;
+    char *ColorScheme;
+    bool  TLSFirst;
+    char *WinCertStoreType;
+    char *WinCertStoreMatchBy;
+    char *WinCertStoreMatch;
+    char **WinCertStoreCaMatch;
+    int   WinCertStoreCaMatchLen;
 
 } natsContextSettings;
 
-void
+/** \brief Destroys settings returned by #natsContext_Connect.
+ *
+ * @param settings the settings to destroy; `NULL` is a no-op.
+ */
+NATS_EXTERN void
 natsContextSettings_Destroy(natsContextSettings *settings);
 
-natsStatus
+/** \brief Connects to the NATS server configured by the named context.
+ *
+ * The context with:
+ * - an absolute path to a `.json` file loads that file directly;
+ * - any other non-empty `name` loads
+ *   `<config>/nats/context/<name>.json`;
+ * - `NULL` or `""` loads the context selected in
+ *   `<config>/nats/context.txt`; with no selection either, it connects to
+ *   the default server with no context applied.
+ *
+ * `<config>` is `$XDG_CONFIG_HOME`, or `<home>/.config` when unset — on
+ * every platform, matching where the `nats` CLI stores its contexts.
+ *
+ * \warning A caller-supplied `opts` is configured **in place** and remains
+ * the caller's to destroy. Context values overwrite overlapping caller
+ * settings and the object stays modified after the call, possibly partially
+ * on error. Pass options that the context does not set (callbacks, timeouts,
+ * connection name, ...), or pass `NULL` to use a fresh internal object.
+ *
+ * @param nc out-param: the connection; destroy with
+ * #natsConnection_Destroy.
+ * @param settings optional out-param: the resolved context settings, e.g.
+ * to read #natsContextSettings.JSDomain; destroy with
+ * #natsContextSettings_Destroy. Set to `NULL` on error. May be `NULL` when
+ * the settings are not needed.
+ * @param name context name, absolute path to a context file, or
+ * `NULL`/`""` for the selected context.
+ * @param opts options applied to the connection, or `NULL` (see warning).
+ * @return #NATS_OK, #NATS_INVALID_ARG if `nc` is `NULL` or the name is not
+ * a valid context name, #NATS_NOT_FOUND if no context exists under the name
+ * or `nsc` is not on the `PATH`, #NATS_ERR for an unreadable/malformed
+ * context file, an unsupported setting or a failed `nsc` lookup,
+ * #NATS_NO_MEMORY, or any status from the connection attempt itself.
+ */
+NATS_EXTERN natsStatus
 natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
-                    char *name, natsOptions *opts);
+                    const char *name, natsOptions *opts);
+
+/** @} */ // end of natsContextGroup
 
 #if defined(__cplusplus)
 }

@@ -29,6 +29,9 @@ typedef struct __natsContext
     natsContextSettings *settings;
     char *path;
 
+    char *nscCreds;
+    char *nscUrl;
+
 } natsContext;
 
 static natsStatus
@@ -50,13 +53,11 @@ natsContextSettings_Destroy(natsContextSettings *settings)
     NATS_FREE(settings->Name);
     NATS_FREE(settings->Description);
     NATS_FREE(settings->URL);
-    NATS_FREE(settings->nscUrl);
     NATS_FREE(settings->SocksProxy);
     NATS_FREE(settings->Token);
     NATS_FREE(settings->User);
     NATS_FREE(settings->Password);
     NATS_FREE(settings->Creds);
-    NATS_FREE(settings->nscCreds);
     NATS_FREE(settings->NKey);
     NATS_FREE(settings->Cert);
     NATS_FREE(settings->Key);
@@ -307,8 +308,6 @@ _createContextPath(char **path, const char *name)
     return s;
 }
 
-// Mirrors Go's knownContext: true when the context file at 'path' exists.
-// Name validation and path building happen earlier in _createContextPath.
 static bool
 _isKnownContext(char *path)
 {
@@ -326,9 +325,7 @@ _isKnownContext(char *path)
 }
 
 // Reads the entire file at 'path' into a NUL-terminated, heap-allocated buffer
-// and reports its byte length in *size. Unlike _context_readCtxFromFile the
-// path is used verbatim, and a missing or unreadable file is an error: by this
-// point the caller has already resolved and validated the path.
+// and reports its byte length in *size.
 static natsStatus
 _readFileContent(const char *path, char **content, long *size)
 {
@@ -534,14 +531,122 @@ _expandEnv(const char *src, char **out)
     return s;
 }
 
+// Joins 'count' strings with commas into a newly allocated string, mirroring
+// Go's strings.Join(..., ","). The inverse of _splitServers below.
+static natsStatus
+_joinServers(char **servers, int count, char **out)
+{
+    natsBuffer buf;
+    natsStatus s;
+    int        i;
+
+    s = natsBuf_Init(&buf, 64);
+
+    for (i = 0; (s == NATS_OK) && (i < count); i++)
+    {
+        if (i > 0)
+            s = natsBuf_AppendByte(&buf, ',');
+        IFOK(s, natsBuf_Append(&buf, servers[i], (int) strlen(servers[i])));
+    }
+
+    IFOK(s, natsBuf_AppendByte(&buf, '\0'));
+    if (s == NATS_OK)
+    {
+        *out = NATS_STRDUP(natsBuf_Data(&buf));
+        if (*out == NULL)
+            s = NATS_NO_MEMORY;
+    }
+
+    natsBuf_Destroy(&buf);
+    return s;
+}
+
+// Runs `nsc generate profile <nsc>` and records the user credentials and
+// operator service URLs it reports. The program is run directly rather
+// than through a shell, so the context's `nsc` value is passed
+// as one argument instead of being interpolated into a command line.
 static natsStatus
 _context_resolveNscLookup(natsContext *ctx)
 {
-    natsStatus s = NATS_OK;
-    if (ctx == NULL || ctx->settings == NULL)
+    natsStatus  s        = NATS_OK;
+    natsJSON   *j        = NULL;
+    natsJSON   *op       = NULL;
+    char       *out      = NULL;
+    char       *creds    = NULL;
+    char      **services = NULL;
+    size_t      len      = 0;
+    int         count    = 0;
+    int         code     = 0;
+    int         i;
+    const char *args[]   = { "nsc", "generate", "profile", NULL, NULL };
+
+    if ((ctx == NULL) || (ctx->settings == NULL))
         return NATS_INVALID_ARG;
     if (nats_IsStringEmpty(ctx->settings->NSCLookup))
         return NATS_OK;
+
+    args[3] = ctx->settings->NSCLookup;
+
+    // NATS_NOT_FOUND here is Go's "cannot find 'nsc' in user path".
+    s = natsSys_RunCommand(args, &out, &code);
+    if (s != NATS_OK)
+        return s;
+
+    // nsc ran and failed: its combined output was the diagnostic in Go.
+    len = strlen(out);
+    if ((code != 0) || (len > INT_MAX))
+    {
+        NATS_FREE(out);
+        return NATS_ERR;
+    }
+
+    s = natsJSON_Parse(&j, out, (int) len);
+    NATS_FREE(out);
+    if (s != NATS_OK)
+        return (s == NATS_NO_MEMORY) ? s : NATS_ERR; // unparsable nsc output
+
+    // Absent keys keep their zero value, as Go's json.Unmarshal leaves them.
+    s = _optStr(j, "user_creds", &creds);
+    if (s == NATS_OK)
+    {
+        s = natsJSON_Field(j, "operator", &op);
+        if (s == NATS_NOT_FOUND)
+            s = NATS_OK;
+        else if ((s == NATS_OK) && (natsJSON_Type(op) != NATS_JSON_NULL))
+        {
+            s = natsJSON_GetStrArray(op, "service", &services, &count);
+            if (s == NATS_NOT_FOUND)
+                s = NATS_OK;
+        }
+    }
+
+    if ((s == NATS_OK) && !nats_IsStringEmpty(creds))
+    {
+        NATS_FREE(ctx->nscCreds);
+        ctx->nscCreds = creds;
+        creds         = NULL;
+    }
+
+    if ((s == NATS_OK) && (count > 0))
+    {
+        char *url = NULL;
+
+        s = _joinServers(services, count, &url);
+        if (s == NATS_OK)
+        {
+            NATS_FREE(ctx->nscUrl);
+            ctx->nscUrl = url;
+        }
+    }
+
+    for (i = 0; i < count; i++)
+        NATS_FREE(services[i]);
+    NATS_FREE(services);
+    NATS_FREE(creds);
+    natsJSON_Destroy(j);
+
+    if ((s != NATS_OK) && (s != NATS_NO_MEMORY))
+        s = NATS_ERR;
 
     return s;
 }
@@ -578,10 +683,7 @@ _context_loadActiveContext(natsContext *ctx)
             return s;
 
         if (!_isKnownContext(ctx->path))
-        {
-            s = NATS_INVALID_ARG;
-            return s;
-        }
+            return NATS_NOT_FOUND;
     }
 
     s = _readFileContent(ctx->path, &content, &size);
@@ -618,7 +720,11 @@ _context_loadActiveContext(natsContext *ctx)
     }
 
     if (!nats_IsStringEmpty(ctx->settings->NSCLookup))
+    {
         s = _context_resolveNscLookup(ctx);
+        if (s != NATS_OK)
+            return s;
+    }
 
     return s;
 }
@@ -839,7 +945,7 @@ _context_ConnectInternal(natsConnection **nc, natsContext *ctx, natsOptions *opt
 
 natsStatus
 natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
-                    char *name, natsOptions *opts)
+                    const char *name, natsOptions *opts)
 {
     natsContext ctx;
     natsConnection *conn = NULL;
@@ -850,6 +956,10 @@ natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
 
     if (nc == NULL)
         return NATS_INVALID_ARG;
+
+    // NULL and "" both mean "connect to the selected context".
+    if (name == NULL)
+        name = "";
 
     memset(&ctx, 0, sizeof(natsContext));
 
@@ -910,6 +1020,8 @@ done:
         natsOptions_Destroy(effectiveOpts);
     NATS_FREE(ctx.name);
     NATS_FREE(ctx.path);
+    NATS_FREE(ctx.nscCreds);
+    NATS_FREE(ctx.nscUrl);
     if (s != NATS_OK)
     {
         natsContextSettings_Destroy(ctxSettings);
