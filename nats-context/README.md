@@ -50,9 +50,32 @@ The `name` argument may be:
   (from `<config>/nats/context.txt`); if none is selected either, connects
   to the default server with no context applied.
 
-Pass `NULL` for `settings` if you do not need them, and a `natsOptions`
-object as the last argument to add options the context does not cover
-(callbacks, timeouts, connection name, ...).
+Pass `NULL` for `settings` if you do not need them.
+
+## Adding your own options
+
+The last argument is a `natsOptions` for anything the context does not cover
+(callbacks, timeouts, connection name, ...):
+
+```c
+natsOptions *opts = NULL;
+
+natsOptions_Create(&opts);
+natsOptions_SetName(opts, "my-app");
+
+natsContext_Connect(&nc, &settings, "staging", opts);
+
+// The options are borrowed, not adopted: destroying them does not affect the
+// connection, which took its own copy.
+natsOptions_Destroy(opts);
+```
+
+The object is configured **in place** and stays modified after the call —
+possibly partially, if the call failed. Context values are layered on top, so
+they overwrite anything the two both set. Note this is the opposite of
+orbit.go, where caller options are appended last and therefore win; cnats
+exposes no accessors for reading a `natsOptions` back, so they cannot be
+merged the other way round.
 
 # Supported settings
 
@@ -60,16 +83,20 @@ All context settings are applied to the connection except:
 
 - `nkey` — cnats cannot derive the public key from a seed file;
 - `socks_proxy` — cnats has no SOCKS dialer;
-- `windows_cert_store` (and related) — also unsupported by orbit.go.
 
-A context requesting any of these fails with an error rather than silently
-connecting without it.
+
+A context requesting any of these fails with `NATS_ILLEGAL_STATE` rather than
+silently connecting without it.
+
+A context carrying `ca`, or `cert` and `key`, requires TLS: the connection
+fails rather than falling back to plain text against a server that does not
+insist on TLS.
 
 `nsc` is resolved before connecting by running `nsc generate profile <value>`,
 which must be on the `PATH`; a lookup that cannot be run, fails, or returns
 something other than a profile fails the connect. The credentials and server
-URLs the profile reports are *not* applied to the connection, matching
-orbit.go, where they are stored in unexported fields that nothing reads.
+URLs the profile reports are *not* applied to the connection — the lookup only
+has to succeed.
 
 `jetstream_domain`, `jetstream_api_prefix`, `jetstream_event_prefix`,
 `user_jwt` and `color_scheme` are returned in `natsContextSettings` for the

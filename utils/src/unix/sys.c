@@ -14,9 +14,11 @@
 #include "../os_shims.h"
 #include "../buf.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -44,9 +46,20 @@ natsSys_GetHomeDir(char **homeDir)
 }
 
 bool
-natsSys_IsPathSep(char c)
+natsSys_PathExists(const char *path)
 {
-    return (c == '/');
+    struct stat st;
+
+    if (path == NULL)
+        return false;
+
+    if (stat(path, &st) == 0)
+        return true;
+
+    // Only these two mean "not there" — ENOTDIR because a non-directory used as
+    // a path component cannot hold the file either. Every other errno leaves the
+    // path reported as existing, so that opening it surfaces the real error.
+    return (errno != ENOENT) && (errno != ENOTDIR);
 }
 
 bool
@@ -63,6 +76,7 @@ natsSys_RunCommand(const char *const *args, char **out, int *exitCode)
     int        outFds[2] = {-1, -1};
     int        errFds[2] = {-1, -1};
     pid_t      pid       = -1;
+    pid_t      reaped    = -1;
     int        execErrno = 0;
     int        status    = 0;
 
@@ -142,13 +156,15 @@ natsSys_RunCommand(const char *const *args, char **out, int *exitCode)
     if (read(errFds[0], &execErrno, sizeof(execErrno)) != (ssize_t) sizeof(execErrno))
         execErrno = 0;
 
-    while ((waitpid(pid, &status, 0) < 0) && (errno == EINTR))
+    while (((reaped = waitpid(pid, &status, 0)) < 0) && (errno == EINTR))
         ;
 
     if (s == NATS_OK)
     {
         if (execErrno != 0)
             s = (execErrno == ENOENT) ? NATS_NOT_FOUND : NATS_ERR;
+        else if (reaped < 0)
+            s = NATS_ERR; // could not be reaped: 'status' says nothing
         else if (!WIFEXITED(status))
             s = NATS_ERR; // killed by a signal
     }

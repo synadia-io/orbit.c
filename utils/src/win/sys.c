@@ -47,13 +47,29 @@ natsSys_GetHomeDir(char **homeDir)
 }
 
 bool
-natsSys_IsPathSep(char c)
+natsSys_PathExists(const char *path)
 {
-    return ((c == '/') || (c == '\\'));
+    if (path == NULL)
+        return false;
+
+    if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
+        return true;
+
+    // Only these mean "not there"; any other reason leaves the path reported as
+    // existing, so that opening it surfaces the real error.
+    switch (GetLastError())
+    {
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND:
+        case ERROR_INVALID_NAME:
+            return false;
+        default:
+            return true;
+    }
 }
 
-// Mirrors Go's filepath.IsAbs on Windows: drive-relative ("C:foo") and
-// rooted ("\foo") paths are not considered absolute.
+// Drive-relative ("C:foo") and rooted ("\foo") paths are not absolute: neither
+// names a file on its own without the process's current drive or directory.
 bool
 natsSys_IsAbsPath(const char *path)
 {

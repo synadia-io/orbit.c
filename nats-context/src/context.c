@@ -133,52 +133,19 @@ _unmarshalContextSettings(natsContextSettings **settings, natsJSON *j)
     IFOK(s, _optStrArray(j, "windows_ca_certs_match", &(*settings)->WinCertStoreCaMatch,
                          &(*settings)->WinCertStoreCaMatchLen));
 
+    // A document that is not an object, or a key holding a value of the wrong
+    // type, surfaces as NATS_INVALID_ARG from the accessors above. Report it as
+    // the malformed-file error the API documents; NATS_INVALID_ARG is reserved
+    // for a bad argument to natsContext_Connect itself.
+    if ((s != NATS_OK) && (s != NATS_NO_MEMORY))
+        s = NATS_ERR;
+
     return s;
 }
 
-// Base name of filename without its extension, mirroring Go's
-// strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename)):
-// trailing separators are ignored and the extension starts at the last dot
-// of the final element, so a dotfile like ".json" yields an empty name.
-static natsStatus
-_name_from_filename(char **name, const char *filename)
-{
-    const char *end = filename + strlen(filename);
-    const char *base = filename;
-    const char *dot = NULL;
-    size_t len = 0;
-    char *out = NULL;
-
-    while ((end > filename) && natsSys_IsPathSep(end[-1]))
-        end--;
-
-    for (const char *p = filename; p < end; p++)
-    {
-        if (natsSys_IsPathSep(*p))
-            base = p + 1;
-    }
-
-    for (const char *p = base; p < end; p++)
-    {
-        if (*p == '.')
-            dot = p;
-    }
-
-    len = (size_t)((dot != NULL ? dot : end) - base);
-    out = (char *) NATS_MALLOC(len + 1);
-    if (out == NULL)
-        return NATS_NO_MEMORY;
-
-    memcpy(out, base, len);
-    out[len] = '\0';
-
-    *name = out;
-    return NATS_OK;
-}
-
-// Mirrors Go's parentDir: XDG_CONFIG_HOME if set, otherwise <home>/.config —
-// on every platform, including Windows, to stay compatible with where the
-// `nats` CLI stores its contexts.
+// XDG_CONFIG_HOME if set, otherwise <home>/.config — on every platform,
+// including Windows, to stay compatible with where the `nats` CLI stores its
+// contexts.
 static natsStatus
 _context_parentDir(char **dir)
 {
@@ -214,9 +181,9 @@ static natsStatus
 _readFileContent(const char *path, char **content, long *size);
 
 // Reads <config>/nats/<file> and returns its content with surrounding
-// whitespace trimmed. Mirrors Go's readCtxFromFile: a missing or unreadable
-// file (or config dir) yields *content == NULL with NATS_OK, not an error;
-// only allocation failures are reported.
+// whitespace trimmed. A missing or unreadable file (or config dir) yields
+// *content == NULL with NATS_OK, not an error; only allocation failures are
+// reported.
 static natsStatus
 _context_readCtxFromFile(char **content, const char *file)
 {
@@ -308,22 +275,6 @@ _createContextPath(char **path, const char *name)
     return s;
 }
 
-static bool
-_isKnownContext(char *path)
-{
-    FILE *f = NULL;
-    bool known = false;
-
-    f = fopen(path, "rb");
-    if (f != NULL)
-    {
-        known = true;
-        fclose(f);
-    }
-
-    return known;
-}
-
 // Reads the entire file at 'path' into a NUL-terminated, heap-allocated buffer
 // and reports its byte length in *size.
 static natsStatus
@@ -371,8 +322,7 @@ done:
     return s;
 }
 
-// _isShellSpecialVar and _isAlphaNum mirror the Go os package helpers used by
-// os.Expand: the set of one-character variable names, and the characters that
+// The one-character variable names a shell recognises, and the characters that
 // may appear in a bare $name reference.
 static bool
 _isShellSpecialVar(char c)
@@ -409,9 +359,9 @@ _isAlphaNum(char c)
            ((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z'));
 }
 
-// Mirrors Go's getShellName: given the text right after a '$', reports the
-// referenced variable name via *name/*nameLen and returns the number of bytes
-// consumed from 's'. nameLen == 0 with a positive return means invalid syntax
+// Given the text right after a '$', reports the referenced variable name via
+// *name/*nameLen and returns the number of bytes consumed from 's'.
+// nameLen == 0 with a positive return means invalid syntax
 // to be dropped; nameLen == 0 with a zero return means the '$' was not followed
 // by a name and should be kept verbatim.
 static size_t
@@ -462,13 +412,13 @@ _getShellName(const char *s, size_t slen, const char **name, size_t *nameLen)
     return i;
 }
 
-// Expands $VAR and ${VAR} references in 'src' against the process environment,
-// mirroring Go's os.ExpandEnv. Undefined variables expand to the empty string.
-// On success *out is a newly allocated, NUL-terminated string owned by caller.
+// Expands $VAR and ${VAR} references in 'src' against the process environment.
+// Undefined variables expand to the empty string. On success *out is a newly
+// allocated, NUL-terminated string owned by the caller.
 static natsStatus
 _expandEnv(const char *src, char **out)
 {
-    natsBuffer buf;
+    natsBuffer buf = NATS_EMPTY_BUFFER;
     natsStatus s;
     size_t     len = strlen(src);
     size_t     i   = 0;
@@ -531,12 +481,12 @@ _expandEnv(const char *src, char **out)
     return s;
 }
 
-// Joins 'count' strings with commas into a newly allocated string, mirroring
-// Go's strings.Join(..., ","). The inverse of _splitServers below.
+// Joins 'count' strings with commas into a newly allocated string. The inverse
+// of _splitServers below.
 static natsStatus
 _joinServers(char **servers, int count, char **out)
 {
-    natsBuffer buf;
+    natsBuffer buf = NATS_EMPTY_BUFFER;
     natsStatus s;
     int        i;
 
@@ -587,12 +537,13 @@ _context_resolveNscLookup(natsContext *ctx)
 
     args[3] = ctx->settings->NSCLookup;
 
-    // NATS_NOT_FOUND here is Go's "cannot find 'nsc' in user path".
+    // NATS_NOT_FOUND here means 'nsc' is not on the PATH.
     s = natsSys_RunCommand(args, &out, &code);
     if (s != NATS_OK)
         return s;
 
-    // nsc ran and failed: its combined output was the diagnostic in Go.
+    // nsc ran and failed. Its combined output is the diagnostic, but there is no
+    // way to hand it back: nats_setError is private to cnats.
     len = strlen(out);
     if ((code != 0) || (len > INT_MAX))
     {
@@ -605,7 +556,7 @@ _context_resolveNscLookup(natsContext *ctx)
     if (s != NATS_OK)
         return (s == NATS_NO_MEMORY) ? s : NATS_ERR; // unparsable nsc output
 
-    // Absent keys keep their zero value, as Go's json.Unmarshal leaves them.
+    // Absent keys are not an error; they leave their field NULL.
     s = _optStr(j, "user_creds", &creds);
     if (s == NATS_OK)
     {
@@ -671,9 +622,9 @@ _context_loadActiveContext(natsContext *ctx)
             if (s != NATS_OK)
                 return s;
 
-            // No name given and no selected context: mirror Go's `return nil`,
-            // leaving the settings at their zero values so the connection uses
-            // cnats' default server with no auth.
+            // No name given and no selected context is not an error: the
+            // settings stay at their zero values and the connection falls back
+            // to cnats' default server with no auth.
             if (nats_IsStringEmpty(ctx->name))
                 return NATS_OK;
         }
@@ -682,7 +633,9 @@ _context_loadActiveContext(natsContext *ctx)
         if (s != NATS_OK)
             return s;
 
-        if (!_isKnownContext(ctx->path))
+        // Only a genuinely absent file is an unknown context; anything else
+        // (an unreadable file, say) is reported by the read below.
+        if (!natsSys_PathExists(ctx->path))
             return NATS_NOT_FOUND;
     }
 
@@ -729,9 +682,9 @@ _context_loadActiveContext(natsContext *ctx)
     return s;
 }
 
-// Mirrors Go's expandHomedir: a leading '~' is replaced with the user's home
-// directory. If 'path' does not start with '~', or the home directory cannot be
-// resolved, a plain copy is returned. Only allocation failure is an error.
+// Replaces a leading '~' with the user's home directory. If 'path' does not
+// start with '~', or the home directory cannot be resolved, a plain copy is
+// returned. Only allocation failure is an error.
 static natsStatus
 _expandHomedir(const char *path, char **out)
 {
@@ -834,16 +787,39 @@ fail:
     return NATS_NO_MEMORY;
 }
 
-// Port of Go's natsOptions(): translates the resolved context settings onto a
-// cnats natsOptions. NKey, SOCKS proxy and Windows cert stores have no cnats
-// public-API equivalent (no seed->pubkey derivation, no custom SOCKS dialer), so
-// a context requesting them is rejected rather than silently connected without.
+// Translates the resolved context settings onto a cnats natsOptions. NKey,
+// SOCKS proxy and Windows cert stores have no cnats public-API equivalent (no
+// seed->pubkey derivation, no custom SOCKS dialer), so a context requesting them
+// is rejected rather than silently connected without.
 static natsStatus
 _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
 {
     natsStatus s = NATS_OK;
 
-    // Authentication is mutually exclusive, in Go's precedence order.
+    // An empty URL leaves cnats to use its default server, and leaves any
+    // servers the caller had set on 'opts' in place.
+    if (!nats_IsStringEmpty(cfg->URL))
+    {
+        char **servers = NULL;
+        int    count   = 0;
+        int    i;
+
+        s = _splitServers(cfg->URL, &servers, &count);
+        if (s != NATS_OK)
+            return s;
+
+        if (count > 0)
+            s = natsOptions_SetServers(opts, (const char **) servers, count);
+
+        for (i = 0; i < count; i++)
+            NATS_FREE(servers[i]);
+        NATS_FREE(servers);
+
+        if (s != NATS_OK)
+            return s;
+    }
+
+    // Authentication is mutually exclusive: user/password, then creds, then nkey.
     if (!nats_IsStringEmpty(cfg->User))
     {
         IFOK(s, natsOptions_SetUserInfo(opts, cfg->User, cfg->Password));
@@ -860,7 +836,7 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
     {
         // cnats needs the NKey public key, which the context file does not store
         // and which cannot be derived from the seed via the public API.
-        return NATS_ERR;
+        return NATS_ILLEGAL_STATE;
     }
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->Token))
@@ -880,6 +856,10 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
         s = _expandHomedir(cfg->Cert, &cert);
         IFOK(s, _expandHomedir(cfg->Key, &key));
         IFOK(s, natsOptions_LoadCertificatesChain(opts, cert, key));
+        // A context carrying TLS material means to require TLS, but the cnats
+        // loader only builds the SSL context: without this the connection stays
+        // in plain text unless the server's INFO happens to demand TLS.
+        IFOK(s, natsOptions_SetSecure(opts, true));
         NATS_FREE(cert);
         NATS_FREE(key);
     }
@@ -890,11 +870,12 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
 
         s = _expandHomedir(cfg->CA, &ca);
         IFOK(s, natsOptions_LoadCATrustedCertificates(opts, ca));
+        IFOK(s, natsOptions_SetSecure(opts, true)); // as above
         NATS_FREE(ca);
     }
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->SocksProxy))
-        return NATS_ERR; // cnats has no SOCKS proxy dialer
+        return NATS_ILLEGAL_STATE; // cnats has no SOCKS proxy dialer
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->InboxPrefix))
     {
@@ -907,41 +888,10 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
     }
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->WinCertStoreType))
-        return NATS_ERR; // windows cert stores are unsupported (Go errors here too)
+        return NATS_ILLEGAL_STATE; // cnats cannot read certificates from a Windows store
 
     return s;
 }
-
-// Port of Go's connect(): point the options at the context's server URL(s) and
-// open the connection. An empty URL leaves cnats to use its default server.
-static natsStatus
-_context_ConnectInternal(natsConnection **nc, natsContext *ctx, natsOptions *opts)
-{
-    natsStatus s       = NATS_OK;
-    char     **servers = NULL;
-    int        count   = 0;
-    int        i;
-
-    if (!nats_IsStringEmpty(ctx->settings->URL))
-    {
-        s = _splitServers(ctx->settings->URL, &servers, &count);
-        if (s != NATS_OK)
-            return s;
-
-        if (count > 0)
-            s = natsOptions_SetServers(opts, (const char **) servers, count);
-
-        for (i = 0; i < count; i++)
-            NATS_FREE(servers[i]);
-        NATS_FREE(servers);
-
-        if (s != NATS_OK)
-            return s;
-    }
-
-    return natsConnection_Connect(nc, opts);
-}
-
 
 natsStatus
 natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
@@ -955,7 +905,11 @@ natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
     natsStatus s = NATS_OK;
 
     if (nc == NULL)
+    {
+        if (settings != NULL)
+            *settings = NULL;
         return NATS_INVALID_ARG;
+    }
 
     // NULL and "" both mean "connect to the selected context".
     if (name == NULL)
@@ -965,10 +919,9 @@ natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
 
     if (natsSys_IsAbsPath(name))
     {
-        s = _name_from_filename(&ctx.name, name);
-        if (s != NATS_OK)
-            goto done;
-
+        // An absolute path names the context file directly, and the context
+        // name is then never consulted (settings->Name comes from the file's
+        // "name" key).
         ctx.path = NATS_STRDUP(name);
         if (ctx.path == NULL)
         {
@@ -985,6 +938,7 @@ natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
             goto done;
         }
     }
+
     s = _natsContextSettings_Create(&ctxSettings);
     if (s != NATS_OK)
         goto done;
@@ -1011,9 +965,10 @@ natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
     if (s != NATS_OK)
         goto done;
 
-    s = _context_ConnectInternal(&conn, &ctx, effectiveOpts);
-    if (s != NATS_OK)
-        goto done;
+    // NATS_NOT_YET_CONNECTED is not a failure: 'opts' asked for
+    // retry-on-failed-connect and cnats hands back a live connection that keeps
+    // trying in the background, so it is returned to the caller like NATS_OK.
+    s = natsConnection_Connect(&conn, effectiveOpts);
 
 done:
     if (ownOpts)
@@ -1022,7 +977,7 @@ done:
     NATS_FREE(ctx.path);
     NATS_FREE(ctx.nscCreds);
     NATS_FREE(ctx.nscUrl);
-    if (s != NATS_OK)
+    if ((s != NATS_OK) && (s != NATS_NOT_YET_CONNECTED))
     {
         natsContextSettings_Destroy(ctxSettings);
         natsConnection_Destroy(conn);

@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
@@ -467,7 +468,7 @@ test_connect_no_context(void)
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
-    // Empty name with nothing selected mirrors Go: connect with defaults.
+    // Empty name with nothing selected is not an error: connect with defaults.
     test("Connect with no context: ");
     s = natsContext_Connect(&nc, &settings, empty, NULL);
     testCond((s == NATS_OK) && (nc != NULL) &&
@@ -581,7 +582,7 @@ test_unsupported_nkey(void)
 
     test("nkey context is rejected: ");
     s = natsContext_Connect(&nc, &settings, name, NULL);
-    testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
+    testCond((s == NATS_ILLEGAL_STATE) && (nc == NULL) && (settings == NULL));
 
     _cleanup(settings, nc, NATS_INVALID_PID, base);
 }
@@ -605,7 +606,7 @@ test_unsupported_socks(void)
 
     test("socks_proxy context is rejected: ");
     s = natsContext_Connect(&nc, &settings, name, NULL);
-    testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
+    testCond((s == NATS_ILLEGAL_STATE) && (nc == NULL) && (settings == NULL));
 
     _cleanup(settings, nc, NATS_INVALID_PID, base);
 }
@@ -752,11 +753,192 @@ test_connect_with_caller_opts(void)
     testCond((s == NATS_OK) && (nc != NULL) &&
              (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
 
+    test("Settings the context does not cover are kept: ");
+    testCond((natsConnection_GetName(nc) != NULL) &&
+             (strcmp(natsConnection_GetName(nc), "orbit-ctx-test") == 0));
+
     // The opts object is borrowed: it remains the caller's to destroy, and
     // destroying it must not affect the live connection.
     test("Caller still owns opts: ");
     natsOptions_Destroy(opts);
     testCond(natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED);
+
+    _cleanup(settings, nc, pid, base);
+}
+
+// Context values are layered on top of a caller-supplied opts, so they
+// overwrite it where the two overlap. This is the opposite of orbit.go, where
+// caller options are appended last and win; cnats has no way to read a
+// natsOptions back, so they cannot be merged the other way round.
+void
+test_context_opts_win(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    natsOptions         *opts = NULL;
+    char                 base[256];
+    char                 name[] = "override";
+    // The context carries the credentials the server wants.
+    const char          *json =
+        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\","
+        " \"password\": \"testpass\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "override", json));
+
+    test("Start auth server: ");
+    pid = _startServer(SERVER_URL, "--user testuser --pass testpass", false);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Server ready: ");
+    testCond(_checkStart("nats://testuser:testpass@127.0.0.1:4222", 20) == NATS_OK);
+
+    // Credentials the server would reject, plus a server list pointing nowhere:
+    // the context has to replace both.
+    test("Create conflicting caller options: ");
+    s = natsOptions_Create(&opts);
+    if (s == NATS_OK)
+        s = natsOptions_SetUserInfo(opts, "wronguser", "wrongpass");
+    if (s == NATS_OK)
+    {
+        const char *dead[] = { "nats://127.0.0.1:9999" };
+        s = natsOptions_SetServers(opts, dead, 1);
+    }
+    testCond(s == NATS_OK);
+
+    test("Context overwrites the caller's credentials and servers: ");
+    s = natsContext_Connect(&nc, &settings, name, opts);
+    testCond((s == NATS_OK) && (nc != NULL) &&
+             (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
+
+    natsOptions_Destroy(opts);
+    _cleanup(settings, nc, pid, base);
+}
+
+static void
+_connectedCb(natsConnection *nc, void *closure)
+{
+    (void) nc;
+    (void) closure;
+}
+
+// NATS_NOT_YET_CONNECTED is a live connection that is still retrying in the
+// background, not a failure: it must be handed to the caller, not torn down.
+void
+test_connect_retry_not_yet_connected(void)
+{
+    natsStatus           s;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    natsOptions         *opts = NULL;
+    char                 base[256];
+    char                 name[] = "retryctx";
+    const char          *json = "{ \"url\": \"" SERVER_URL "\" }";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    test("Write context file: ");
+    testCond(_writeContext(base, "retryctx", json));
+
+    // A non-NULL connected callback is what makes cnats return
+    // NATS_NOT_YET_CONNECTED instead of blocking.
+    test("Create retrying options: ");
+    s = natsOptions_Create(&opts);
+    if (s == NATS_OK)
+        s = natsOptions_SetRetryOnFailedConnect(opts, true, _connectedCb, NULL);
+    testCond(s == NATS_OK);
+
+    // No server is started, so the first connect attempt cannot succeed.
+    test("Retrying connect reports NATS_NOT_YET_CONNECTED: ");
+    s = natsContext_Connect(&nc, &settings, name, opts);
+    natsOptions_Destroy(opts);
+    testCond(s == NATS_NOT_YET_CONNECTED);
+
+    test("Connection is returned, not destroyed: ");
+    testCond(nc != NULL);
+
+    test("Settings are returned too: ");
+    testCond((settings != NULL) && (settings->URL != NULL));
+
+    _cleanup(settings, nc, NATS_INVALID_PID, base);
+}
+
+void
+test_null_connection_arg(void)
+{
+    natsStatus           s;
+    natsContextSettings *settings = (natsContextSettings *) (uintptr_t) 0x1;
+    char                 base[256];
+    char                 name[] = "whatever";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    // A NULL 'nc' must be rejected, and 'settings' cleared like every other
+    // error path does.
+    test("NULL connection out-param is NATS_INVALID_ARG: ");
+    s = natsContext_Connect(NULL, &settings, name, NULL);
+    testCond((s == NATS_INVALID_ARG) && (settings == NULL));
+
+    _cleanup(NULL, NULL, NATS_INVALID_PID, base);
+}
+
+// A context carrying TLS material makes TLS mandatory. Against a server with no
+// TLS at all that is reported as NATS_SECURE_CONNECTION_WANTED; without it the
+// connection would silently fall back to plain text.
+
+#define CERT_DIR "certs"
+
+void
+test_tls_material_requires_tls(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 cwd[1024];
+    char                 caJson[1400];
+    char                 certJson[2400];
+    char                 caName[]   = "cactx";
+    char                 certName[] = "certctx";
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    // The test runs from the source test/ directory, so certs/ is relative to
+    // it; contexts need absolute paths.
+    test("Locate certs: ");
+    testCond(getcwd(cwd, sizeof(cwd)) != NULL);
+
+    test("Write context files: ");
+    snprintf(caJson, sizeof(caJson),
+             "{ \"url\": \"" SERVER_URL "\", \"ca\": \"%s/" CERT_DIR "/ca.pem\" }", cwd);
+    snprintf(certJson, sizeof(certJson),
+             "{ \"url\": \"" SERVER_URL "\", \"cert\": \"%s/" CERT_DIR "/client-cert.pem\","
+             " \"key\": \"%s/" CERT_DIR "/client-key.pem\" }", cwd, cwd);
+    testCond(_writeContext(base, "cactx", caJson) &&
+             _writeContext(base, "certctx", certJson));
+
+    test("Start plain (non-TLS) server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("A 'ca' context refuses a plain-text server: ");
+    s = natsContext_Connect(&nc, &settings, caName, NULL);
+    testCond((s == NATS_SECURE_CONNECTION_WANTED) && (nc == NULL) && (settings == NULL));
+
+    test("A 'cert'/'key' context refuses a plain-text server: ");
+    s = natsContext_Connect(&nc, &settings, certName, NULL);
+    testCond((s == NATS_SECURE_CONNECTION_WANTED) && (nc == NULL) && (settings == NULL));
 
     _cleanup(settings, nc, pid, base);
 }
@@ -807,7 +989,7 @@ test_connect_expansion(void)
     nc       = NULL;
 
     // Tilde expansion happens only when the creds path is turned into a
-    // connection option, never in the returned settings (orbit.go parity).
+    // connection option; the settings report the file verbatim.
     test("Creds is not tilde-expanded in settings: ");
     s = natsContext_Connect(&nc, &settings, tildeName, NULL);
     testCond((s == NATS_OK) && (settings != NULL) && (settings->Creds != NULL) &&
@@ -887,7 +1069,7 @@ test_connect_null_json_fields(void)
     natsContextSettings *settings = NULL;
     char                 base[256];
     char                 name[] = "nulls";
-    // JSON null must read as "absent", like Go's encoding/json.
+    // A JSON null must read as "absent", leaving the field at its zero value.
     const char          *json =
         "{ \"url\": \"" SERVER_URL "\", \"user\": null, \"password\": null,"
         " \"tls_first\": null, \"windows_ca_certs_match\": null }";

@@ -54,17 +54,18 @@ extern "C"
 // Returns the current user's home directory as an allocated string.
 natsStatus natsSys_GetHomeDir(char **homeDir);
 
-// Reports whether 'c' is a path separator on the current platform.
-bool natsSys_IsPathSep(char c);
+// Reports whether 'path' exists. A path that cannot be inspected for any
+// reason other than not being there (a permission error, say) is reported as
+// existing, so that opening it reports the real problem.
+bool natsSys_PathExists(const char *path);
 
-// Reports whether 'path' is absolute, following the current platform's rules
-// (mirrors Go's filepath.IsAbs).
+// Reports whether 'path' is absolute, following the current platform's rules.
 bool natsSys_IsAbsPath(const char *path);
 
 // Runs a program without going through a shell and captures its combined
-// stdout and stderr, mirroring Go's exec.Command(...).CombinedOutput().
-// 'args' is a NULL-terminated argument vector whose first entry names the
-// program; it is looked up in the user's PATH when it holds no path separator.
+// stdout and stderr. 'args' is a NULL-terminated argument vector whose first
+// entry names the program; it is looked up in the user's PATH when it holds no
+// path separator.
 //
 // On NATS_OK *out is the NUL-terminated output, owned by the caller, and
 // *exitCode is the program's exit status: a program that ran and failed is
