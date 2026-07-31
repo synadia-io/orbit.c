@@ -14,7 +14,7 @@ endif()
 # Build the test program
 add_executable(nats_context_testsuite test.c)
 
-# Prefer shared library to avoid ASAN mismatch with static cnats builds.
+# Prefer shared library to avoid ASAN mismatch with static nats.c builds.
 if(ORBIT_BUILD_LIB_SHARED)
   target_link_libraries(nats_context_testsuite nats_context ${ORBIT_EXTRA_LIB})
 elseif(ORBIT_BUILD_LIB_STATIC)

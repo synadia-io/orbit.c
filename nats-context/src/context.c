@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #include "context.h"
+#include "socks.h"
 #include "os_shims.h"
 #include "json.h"
 #include "buf.h"
@@ -58,7 +59,6 @@ natsContextSettings_Destroy(natsContextSettings *settings)
     NATS_FREE(settings->User);
     NATS_FREE(settings->Password);
     NATS_FREE(settings->Creds);
-    NATS_FREE(settings->NKey);
     NATS_FREE(settings->Cert);
     NATS_FREE(settings->Key);
     NATS_FREE(settings->CA);
@@ -115,7 +115,6 @@ _unmarshalContextSettings(natsContextSettings **settings, natsJSON *j)
     IFOK(s, _optStr(j, "user", &(*settings)->User));
     IFOK(s, _optStr(j, "password", &(*settings)->Password));
     IFOK(s, _optStr(j, "creds", &(*settings)->Creds));
-    IFOK(s, _optStr(j, "nkey", &(*settings)->NKey));
     IFOK(s, _optStr(j, "cert", &(*settings)->Cert));
     IFOK(s, _optStr(j, "key", &(*settings)->Key));
     IFOK(s, _optStr(j, "ca", &(*settings)->CA));
@@ -543,7 +542,7 @@ _context_resolveNscLookup(natsContext *ctx)
         return s;
 
     // nsc ran and failed. Its combined output is the diagnostic, but there is no
-    // way to hand it back: nats_setError is private to cnats.
+    // way to hand it back: nats_setError is private to nats.c.
     len = strlen(out);
     if ((code != 0) || (len > INT_MAX))
     {
@@ -624,7 +623,7 @@ _context_loadActiveContext(natsContext *ctx)
 
             // No name given and no selected context is not an error: the
             // settings stay at their zero values and the connection falls back
-            // to cnats' default server with no auth.
+            // to nats.c's default server with no auth.
             if (nats_IsStringEmpty(ctx->name))
                 return NATS_OK;
         }
@@ -787,16 +786,17 @@ fail:
     return NATS_NO_MEMORY;
 }
 
-// Translates the resolved context settings onto a cnats natsOptions. NKey,
-// SOCKS proxy and Windows cert stores have no cnats public-API equivalent (no
-// seed->pubkey derivation, no custom SOCKS dialer), so a context requesting them
-// is rejected rather than silently connected without.
+// Translates the resolved context settings onto a nats.c natsOptions. Windows
+// cert stores have no nats.c equivalent, so a context asking for one is rejected
+// rather than silently connected without. An 'nkey' is ignored: nats.c needs the
+// public key to put in the CONNECT, the context file holds only a path to the
+// seed, and nats.c exposes no way to derive one from the other.
 static natsStatus
 _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
 {
     natsStatus s = NATS_OK;
 
-    // An empty URL leaves cnats to use its default server, and leaves any
+    // An empty URL leaves nats.c to use its default server, and leaves any
     // servers the caller had set on 'opts' in place.
     if (!nats_IsStringEmpty(cfg->URL))
     {
@@ -819,7 +819,7 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
             return s;
     }
 
-    // Authentication is mutually exclusive: user/password, then creds, then nkey.
+    // Authentication is mutually exclusive: user/password, then creds.
     if (!nats_IsStringEmpty(cfg->User))
     {
         IFOK(s, natsOptions_SetUserInfo(opts, cfg->User, cfg->Password));
@@ -831,12 +831,6 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
         s = _expandHomedir(cfg->Creds, &creds);
         IFOK(s, natsOptions_SetUserCredentialsFromFiles(opts, creds, NULL));
         NATS_FREE(creds);
-    }
-    else if (!nats_IsStringEmpty(cfg->NKey))
-    {
-        // cnats needs the NKey public key, which the context file does not store
-        // and which cannot be derived from the seed via the public API.
-        return NATS_ILLEGAL_STATE;
     }
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->Token))
@@ -856,7 +850,7 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
         s = _expandHomedir(cfg->Cert, &cert);
         IFOK(s, _expandHomedir(cfg->Key, &key));
         IFOK(s, natsOptions_LoadCertificatesChain(opts, cert, key));
-        // A context carrying TLS material means to require TLS, but the cnats
+        // A context carrying TLS material means to require TLS, but the nats.c
         // loader only builds the SSL context: without this the connection stays
         // in plain text unless the server's INFO happens to demand TLS.
         IFOK(s, natsOptions_SetSecure(opts, true));
@@ -874,8 +868,23 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
         NATS_FREE(ca);
     }
 
+    // Every server in the context is then reached through the proxy: nats.c
+    // hands the whole dial over to the handler, for the first connect and for
+    // every reconnect after it.
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->SocksProxy))
-        return NATS_ILLEGAL_STATE; // cnats has no SOCKS proxy dialer
+    {
+        natsProxyConnHandler handler = NULL;
+        void                *closure = NULL;
+
+        s = natsSocks_ProxyHandler(cfg->SocksProxy, &handler, &closure);
+
+        // A proxy URL the context file got wrong is malformed content like any
+        // other, not a bad argument to natsContext_Connect.
+        if (s == NATS_INVALID_ARG)
+            return NATS_ERR;
+
+        IFOK(s, natsOptions_SetProxyConnHandler(opts, handler, closure));
+    }
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->InboxPrefix))
     {
@@ -888,7 +897,7 @@ _context_setOptions(natsOptions *opts, natsContextSettings *cfg)
     }
 
     if ((s == NATS_OK) && !nats_IsStringEmpty(cfg->WinCertStoreType))
-        return NATS_ILLEGAL_STATE; // cnats cannot read certificates from a Windows store
+        return NATS_ILLEGAL_STATE; // nats.c cannot read certificates from a Windows store
 
     return s;
 }
@@ -966,7 +975,7 @@ natsContext_Connect(natsConnection **nc, natsContextSettings **settings,
         goto done;
 
     // NATS_NOT_YET_CONNECTED is not a failure: 'opts' asked for
-    // retry-on-failed-connect and cnats hands back a live connection that keeps
+    // retry-on-failed-connect and nats.c hands back a live connection that keeps
     // trying in the background, so it is returned to the caller like NATS_OK.
     s = natsConnection_Connect(&conn, effectiveOpts);
 

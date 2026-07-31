@@ -38,6 +38,10 @@ extern "C" {
  * The JetStream fields, #UserJwt and #ColorScheme are informational only:
  * they are returned for the caller to consume (e.g. set `jsOptions.Domain`
  * from #JSDomain) and are not applied to the connection.
+ *
+ * A context's `nkey` has no field here and is not applied: nats.c needs the
+ * public key to put in the CONNECT, the context file stores only a path to
+ * the seed, and nats.c offers no way to derive one from the other.
  */
 typedef struct __natsContextSettings
 {
@@ -49,7 +53,6 @@ typedef struct __natsContextSettings
     char *User;
     char *Password;
     char *Creds;
-    char *NKey;
     char *Cert;
     char *Key;
     char *CA;
@@ -93,7 +96,7 @@ natsContextSettings_Destroy(natsContextSettings *settings);
  * the caller's to destroy. Context values are layered on top and overwrite
  * overlapping caller settings, and the object stays modified after the call,
  * possibly partially on error. Note this is the opposite of orbit.go, where
- * caller options are appended last and therefore win; cnats exposes no
+ * caller options are appended last and therefore win; nats.c exposes no
  * accessors for reading back a `natsOptions`, so the two cannot be merged
  * the other way round. Pass options that the context does not set
  * (callbacks, timeouts, connection name, ...), or pass `NULL` to use a fresh
@@ -114,9 +117,10 @@ natsContextSettings_Destroy(natsContextSettings *settings);
  * caller. Otherwise: #NATS_INVALID_ARG if `nc` is `NULL` or the name is not
  * a valid context name, #NATS_NOT_FOUND if no context exists under the name
  * or `nsc` is not on the `PATH`, #NATS_ILLEGAL_STATE for a setting this
- * library cannot apply (`nkey`, `socks_proxy`, `windows_cert_store`),
- * #NATS_ERR for an unreadable or malformed context file or a failed `nsc`
- * lookup, #NATS_NO_MEMORY, or any status from the connection attempt itself.
+ * library cannot apply (`windows_cert_store`), #NATS_ERR for an unreadable or
+ * malformed context file (including a `socks_proxy` that is not a SOCKS5 URL)
+ * or a failed `nsc` lookup, #NATS_NO_MEMORY, or any status from the connection
+ * attempt itself.
  */
 NATS_EXTERN natsStatus
 natsContext_Connect(natsConnection **nc, natsContextSettings **settings,

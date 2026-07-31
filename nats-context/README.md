@@ -2,7 +2,7 @@
 
 Connect to NATS using a context created by the [`nats` Command Line
 Tool](https://github.com/nats-io/natscli), on top of
-[cnats](https://github.com/nats-io/nats.c).
+[nats.c](https://github.com/nats-io/nats.c).
 
 A context bundles everything needed to reach a NATS deployment — server
 URLs, credentials, TLS files, JetStream domain, inbox prefix — in a JSON
@@ -73,24 +73,38 @@ natsOptions_Destroy(opts);
 The object is configured **in place** and stays modified after the call —
 possibly partially, if the call failed. Context values are layered on top, so
 they overwrite anything the two both set. Note this is the opposite of
-orbit.go, where caller options are appended last and therefore win; cnats
+orbit.go, where caller options are appended last and therefore win; nats.c
 exposes no accessors for reading a `natsOptions` back, so they cannot be
 merged the other way round.
 
 # Supported settings
 
-All context settings are applied to the connection except:
+All context settings are applied to the connection except `nkey`, which is
+ignored: nats.c needs the public key to put in the `CONNECT`, a context file
+stores only the path to the seed, and nats.c exposes no way to derive one from
+the other. A context carrying one connects without it, and there is no `NKey`
+in `natsContextSettings`.
 
-- `nkey` — cnats cannot derive the public key from a seed file;
-- `socks_proxy` — cnats has no SOCKS dialer;
-
-
-A context requesting any of these fails with `NATS_ILLEGAL_STATE` rather than
-silently connecting without it.
+`windows_cert_store` (with `windows_cert_match_by`, `windows_cert_match` and
+`windows_ca_certs_match`) has no nats.c equivalent either, and a context asking
+for one fails with `NATS_ILLEGAL_STATE` rather than silently connecting without
+it.
 
 A context carrying `ca`, or `cert` and `key`, requires TLS: the connection
 fails rather than falling back to plain text against a server that does not
 insist on TLS.
+
+`socks_proxy` is written as `[socks5://][user[:password]@]host[:port]`, with
+the port defaulting to 1080 and the credentials, when given, used for
+username/password authentication ([RFC
+1929](https://datatracker.ietf.org/doc/html/rfc1929)). Every server in the
+context is then reached through that proxy, on the first connect and on every
+reconnect, with host names left for the proxy to resolve. A proxy that cannot
+be reached, refuses the credentials, or refuses the target fails the connect —
+it is never bypassed for a direct connection. Reaching the proxy and getting
+through the handshake has 5 seconds to happen, per server tried; the connect
+timeout in `natsOptions` does not cover it, as nats.c applies that only to the
+connections it makes itself.
 
 `nsc` is resolved before connecting by running `nsc generate profile <value>`,
 which must be on the `PATH`; a lookup that cannot be run, fails, or returns

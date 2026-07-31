@@ -34,6 +34,11 @@
 #include <errno.h>
 #include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -349,6 +354,328 @@ _cleanup(natsContextSettings *settings, natsConnection *nc, natsPid pid, const c
         _rmtree(base);
 }
 
+// A minimal SOCKS5 proxy, forked like the server is, so that a context
+// carrying socks_proxy is exercised over a real handshake. It handles one
+// connection at a time: RFC 1928 method negotiation, RFC 1929
+// username/password when the test asks for it, then it dials the requested
+// target and copies bytes both ways until either side hangs up.
+//
+// A completed handshake writes "<host>:<port>" — the target as it came off the
+// wire — to a marker file, which is how a test tells a proxied connection from
+// one that went straight to the server.
+
+static bool
+_readFull(int fd, void *buf, size_t len)
+{
+    size_t done = 0;
+
+    while (done < len)
+    {
+        ssize_t n = read(fd, (char *) buf + done, len - done);
+
+        if ((n < 0) && (errno == EINTR))
+            continue;
+        if (n <= 0)
+            return false;
+
+        done += (size_t) n;
+    }
+
+    return true;
+}
+
+static bool
+_writeFull(int fd, const void *buf, size_t len)
+{
+    size_t done = 0;
+
+    while (done < len)
+    {
+        ssize_t n = write(fd, (const char *) buf + done, len - done);
+
+        if ((n < 0) && (errno == EINTR))
+            continue;
+        if (n <= 0)
+            return false;
+
+        done += (size_t) n;
+    }
+
+    return true;
+}
+
+// Connects to the target of a CONNECT request. Only numeric IPv4 and the name
+// "localhost" are understood, which keeps this side of the fork to plain
+// syscalls: forking a process that already runs the nats.c threads makes
+// anything that takes a lock (a resolver allocating, say) a hazard.
+static int
+_dialTarget(const char *host, int port)
+{
+    struct sockaddr_in addr;
+    int                fd;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons((uint16_t) port);
+
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1)
+    {
+        if (strcmp(host, "localhost") != 0)
+            return -1;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    }
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+
+    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0)
+    {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+static void
+_writeMarker(const char *path, const char *host, int port)
+{
+    char content[300];
+    int  len = snprintf(content, sizeof(content), "%s:%d", host, port);
+    int  fd  = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+
+    if (fd < 0)
+        return;
+
+    (void) _writeFull(fd, content, (size_t) len);
+    close(fd);
+}
+
+// Runs the handshake on an accepted connection and returns the socket to the
+// target it asked for, or -1.
+static int
+_socksHandshake(int fd, const char *user, const char *pass, const char *marker)
+{
+    unsigned char buf[256];
+    char          host[256];
+    int           methods;
+    int           i;
+    int           port;
+    int           target;
+    bool          wantAuth = (user != NULL);
+    bool          offered  = false;
+
+    if (!_readFull(fd, buf, 2) || (buf[0] != 0x05))
+        return -1;
+
+    methods = buf[1];
+    if (!_readFull(fd, buf, (size_t) methods))
+        return -1;
+
+    for (i = 0; i < methods; i++)
+    {
+        if (buf[i] == (wantAuth ? 0x02 : 0x00))
+            offered = true;
+    }
+
+    buf[0] = 0x05;
+    buf[1] = (unsigned char) (offered ? (wantAuth ? 0x02 : 0x00) : 0xFF);
+    if (!_writeFull(fd, buf, 2) || !offered)
+        return -1;
+
+    if (wantAuth)
+    {
+        char gotUser[256];
+        char gotPass[256];
+        int  len;
+
+        if (!_readFull(fd, buf, 2) || (buf[0] != 0x01))
+            return -1;
+
+        len = buf[1];
+        if (!_readFull(fd, gotUser, (size_t) len))
+            return -1;
+        gotUser[len] = '\0';
+
+        if (!_readFull(fd, buf, 1))
+            return -1;
+
+        len = buf[0];
+        if (!_readFull(fd, gotPass, (size_t) len))
+            return -1;
+        gotPass[len] = '\0';
+
+        buf[0] = 0x01;
+        buf[1] = ((strcmp(gotUser, user) == 0) &&
+                  (strcmp(gotPass, (pass != NULL) ? pass : "") == 0))
+                     ? 0x00
+                     : 0x01;
+
+        if (!_writeFull(fd, buf, 2) || (buf[1] != 0x00))
+            return -1;
+    }
+
+    // Request: VER CMD RSV ATYP DST.ADDR DST.PORT
+    if (!_readFull(fd, buf, 4) || (buf[0] != 0x05) || (buf[1] != 0x01))
+        return -1;
+
+    switch (buf[3])
+    {
+        case 0x01:
+            if (!_readFull(fd, buf, 4) ||
+                (inet_ntop(AF_INET, buf, host, sizeof(host)) == NULL))
+                return -1;
+            break;
+        case 0x03:
+            if (!_readFull(fd, buf, 1))
+                return -1;
+            i = buf[0];
+            if (!_readFull(fd, host, (size_t) i))
+                return -1;
+            host[i] = '\0';
+            break;
+        case 0x04:
+            if (!_readFull(fd, buf, 16) ||
+                (inet_ntop(AF_INET6, buf, host, sizeof(host)) == NULL))
+                return -1;
+            break;
+        default:
+            return -1;
+    }
+
+    if (!_readFull(fd, buf, 2))
+        return -1;
+    port = (buf[0] << 8) | buf[1];
+
+    target = _dialTarget(host, port);
+
+    // Reply, with a 0.0.0.0:0 bound address.
+    memset(buf, 0, 10);
+    buf[0] = 0x05;
+    buf[1] = (unsigned char) ((target < 0) ? 0x05 : 0x00);
+    buf[3] = 0x01;
+
+    if (!_writeFull(fd, buf, 10) || (target < 0))
+    {
+        if (target >= 0)
+            close(target);
+        return -1;
+    }
+
+    _writeMarker(marker, host, port);
+    return target;
+}
+
+static void
+_socksPump(int a, int b)
+{
+    struct pollfd fds[2];
+    char          buf[4096];
+
+    fds[0].fd = a;
+    fds[1].fd = b;
+
+    for (;;)
+    {
+        int i;
+
+        for (i = 0; i < 2; i++)
+        {
+            fds[i].events  = POLLIN;
+            fds[i].revents = 0;
+        }
+
+        if (poll(fds, 2, -1) < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return;
+        }
+
+        for (i = 0; i < 2; i++)
+        {
+            if ((fds[i].revents & POLLIN) != 0)
+            {
+                ssize_t n = read(fds[i].fd, buf, sizeof(buf));
+
+                if (n <= 0)
+                    return;
+                if (!_writeFull(fds[1 - i].fd, buf, (size_t) n))
+                    return;
+            }
+            else if ((fds[i].revents & (POLLHUP | POLLERR)) != 0)
+                return;
+        }
+    }
+}
+
+// Starts the proxy on a free port of the loopback, reported through *port.
+// 'user' non-NULL makes it demand those credentials.
+static natsPid
+_startSocksProxy(int *port, const char *user, const char *pass, const char *marker)
+{
+    struct sockaddr_in addr;
+    socklen_t          len = sizeof(addr);
+    natsPid            pid;
+    int                yes = 1;
+    int                lfd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (lfd < 0)
+        return NATS_INVALID_PID;
+
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port        = 0;
+
+    if ((bind(lfd, (struct sockaddr *) &addr, sizeof(addr)) != 0) ||
+        (listen(lfd, 8) != 0) ||
+        (getsockname(lfd, (struct sockaddr *) &addr, &len) != 0))
+    {
+        close(lfd);
+        return NATS_INVALID_PID;
+    }
+
+    *port = ntohs(addr.sin_port);
+
+    pid = fork();
+    if (pid < 0)
+    {
+        close(lfd);
+        return NATS_INVALID_PID;
+    }
+
+    if (pid == 0)
+    {
+        for (;;)
+        {
+            int client = accept(lfd, NULL, NULL);
+            int target;
+
+            if (client < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+                _exit(1);
+            }
+
+            target = _socksHandshake(client, user, pass, marker);
+            if (target >= 0)
+            {
+                _socksPump(client, target);
+                close(target);
+            }
+            close(client);
+        }
+    }
+
+    close(lfd);
+    return pid;
+}
+
 // Tests.
 
 void
@@ -561,52 +888,233 @@ test_connect_token(void)
     _cleanup(settings, nc, pid, base);
 }
 
-// Unsupported settings must make natsContext_Connect fail (no server needed:
-// the options builder rejects them before any connection attempt).
+// socks_proxy. The proxy runs in a forked child and records the target it was
+// asked for, so these tests can tell a connection that went through it from one
+// that reached the server on its own.
 
 void
-test_unsupported_nkey(void)
+test_socks_proxy(void)
 {
     natsStatus           s;
+    natsPid              pid;
+    natsPid              proxyPid;
     natsConnection      *nc = NULL;
     natsContextSettings *settings = NULL;
     char                 base[256];
-    char                 name[] = "nkeyctx";
-    const char          *json = "{ \"url\": \"" SERVER_URL "\", \"nkey\": \"/tmp/user.nk\" }";
+    char                 marker[512];
+    char                 target[256];
+    char                 json[512];
+    char                 name[] = "socksctx";
+    int                  port = 0;
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
 
+    snprintf(marker, sizeof(marker), "%s/proxy.target", base);
+
+    test("Start SOCKS5 proxy: ");
+    proxyPid = _startSocksProxy(&port, NULL, NULL, marker);
+    testCond(proxyPid != NATS_INVALID_PID);
+
+    // A name for the server, not an address: the proxy is the one that has to
+    // resolve it, so this also covers the domain form of a CONNECT request.
+    snprintf(json, sizeof(json),
+             "{ \"url\": \"nats://localhost:4222\", \"socks_proxy\": \"socks5://127.0.0.1:%d\" }",
+             port);
+
     test("Write context file: ");
-    testCond(_writeContext(base, "nkeyctx", json));
+    testCond(_writeContext(base, name, json));
 
-    test("nkey context is rejected: ");
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Connect through the proxy: ");
     s = natsContext_Connect(&nc, &settings, name, NULL);
-    testCond((s == NATS_ILLEGAL_STATE) && (nc == NULL) && (settings == NULL));
+    testCond((s == NATS_OK) && (nc != NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    test("Status connected: ");
+    testCond(natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED);
+
+    test("Proxy carried the connection: ");
+    testCond(_readFile(marker, target, sizeof(target)) &&
+             (strcmp(target, "localhost:4222") == 0));
+
+    test("Settings report the proxy: ");
+    testCond((settings != NULL) && (settings->SocksProxy != NULL) &&
+             (strstr(settings->SocksProxy, "socks5://127.0.0.1:") == settings->SocksProxy));
+
+    _stopServer(proxyPid);
+    _cleanup(settings, nc, pid, base);
 }
 
 void
-test_unsupported_socks(void)
+test_socks_proxy_auth(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsPid              proxyPid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 marker[512];
+    char                 target[256];
+    char                 json[512];
+    char                 name[] = "socksauth";
+    int                  port = 0;
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    snprintf(marker, sizeof(marker), "%s/proxy.target", base);
+
+    test("Start SOCKS5 proxy demanding credentials: ");
+    proxyPid = _startSocksProxy(&port, "u$er", "p@ss", marker);
+    testCond(proxyPid != NATS_INVALID_PID);
+
+    // The credentials are percent-escaped, the way the `nats` CLI writes a
+    // password holding a '@'.
+    snprintf(json, sizeof(json),
+             "{ \"url\": \"" SERVER_URL "\", "
+             "\"socks_proxy\": \"socks5://u%%24er:p%%40ss@127.0.0.1:%d\" }",
+             port);
+
+    test("Write context file: ");
+    testCond(_writeContext(base, name, json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    test("Connect through the authenticated proxy: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s == NATS_OK) && (nc != NULL));
+
+    test("Proxy carried the connection: ");
+    testCond(_readFile(marker, target, sizeof(target)) &&
+             (strcmp(target, "127.0.0.1:4222") == 0));
+
+    _stopServer(proxyPid);
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_socks_proxy_bad_credentials(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsPid              proxyPid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 marker[512];
+    char                 json[512];
+    char                 name[] = "socksbadauth";
+    int                  port = 0;
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    snprintf(marker, sizeof(marker), "%s/proxy.target", base);
+
+    test("Start SOCKS5 proxy demanding credentials: ");
+    proxyPid = _startSocksProxy(&port, "user", "right", marker);
+    testCond(proxyPid != NATS_INVALID_PID);
+
+    snprintf(json, sizeof(json),
+             "{ \"url\": \"" SERVER_URL "\", "
+             "\"socks_proxy\": \"socks5://user:wrong@127.0.0.1:%d\" }",
+             port);
+
+    test("Write context file: ");
+    testCond(_writeContext(base, name, json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    // The server is up and reachable directly: only the refused proxy stands
+    // between the two, and the connect has to fail on it.
+    test("Rejected credentials fail the connect: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
+
+    _stopServer(proxyPid);
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_socks_proxy_unreachable(void)
+{
+    natsStatus           s;
+    natsPid              pid;
+    natsPid              proxyPid;
+    natsConnection      *nc = NULL;
+    natsContextSettings *settings = NULL;
+    char                 base[256];
+    char                 marker[512];
+    char                 json[512];
+    char                 name[] = "socksdown";
+    int                  port = 0;
+
+    test("Setup config dir: ");
+    testCond(_makeConfigTree(base, sizeof(base)));
+
+    snprintf(marker, sizeof(marker), "%s/proxy.target", base);
+
+    // Started only to be handed a port nothing is listening on afterwards.
+    test("Reserve a proxy port: ");
+    proxyPid = _startSocksProxy(&port, NULL, NULL, marker);
+    testCond(proxyPid != NATS_INVALID_PID);
+    _stopServer(proxyPid);
+
+    snprintf(json, sizeof(json),
+             "{ \"url\": \"" SERVER_URL "\", \"socks_proxy\": \"socks5://127.0.0.1:%d\" }",
+             port);
+
+    test("Write context file: ");
+    testCond(_writeContext(base, name, json));
+
+    test("Start server: ");
+    pid = _startServer(SERVER_URL, NULL, true);
+    CHECK_SERVER_STARTED(pid);
+    testCond(true);
+
+    // The server would be reachable directly, so a connection here would mean
+    // the proxy had been quietly skipped.
+    test("Dead proxy fails the connect: ");
+    s = natsContext_Connect(&nc, &settings, name, NULL);
+    testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
+
+    _cleanup(settings, nc, pid, base);
+}
+
+void
+test_socks_proxy_bad_url(void)
 {
     natsStatus           s;
     natsConnection      *nc = NULL;
     natsContextSettings *settings = NULL;
     char                 base[256];
-    char                 name[] = "socksctx";
+    char                 name[] = "socksbadurl";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"socks_proxy\": \"socks5://127.0.0.1:1080\" }";
+        "{ \"url\": \"" SERVER_URL "\", \"socks_proxy\": \"http://127.0.0.1:8080\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
 
     test("Write context file: ");
-    testCond(_writeContext(base, "socksctx", json));
+    testCond(_writeContext(base, name, json));
 
-    test("socks_proxy context is rejected: ");
+    // No server needed: a proxy that is not SOCKS5 is rejected while the
+    // options are built, before anything is dialed, and reported as the
+    // malformed context content it is.
+    test("Non-SOCKS proxy URL is rejected: ");
     s = natsContext_Connect(&nc, &settings, name, NULL);
-    testCond((s == NATS_ILLEGAL_STATE) && (nc == NULL) && (settings == NULL));
+    testCond((s == NATS_ERR) && (nc == NULL) && (settings == NULL));
 
     _cleanup(settings, nc, NATS_INVALID_PID, base);
 }
@@ -768,7 +1276,7 @@ test_connect_with_caller_opts(void)
 
 // Context values are layered on top of a caller-supplied opts, so they
 // overwrite it where the two overlap. This is the opposite of orbit.go, where
-// caller options are appended last and win; cnats has no way to read a
+// caller options are appended last and win; nats.c has no way to read a
 // natsOptions back, so they cannot be merged the other way round.
 void
 test_context_opts_win(void)
@@ -847,7 +1355,7 @@ test_connect_retry_not_yet_connected(void)
     test("Write context file: ");
     testCond(_writeContext(base, "retryctx", json));
 
-    // A non-NULL connected callback is what makes cnats return
+    // A non-NULL connected callback is what makes nats.c return
     // NATS_NOT_YET_CONNECTED instead of blocking.
     test("Create retrying options: ");
     s = natsOptions_Create(&opts);

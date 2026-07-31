@@ -45,8 +45,14 @@ extern "C"
 
 #if defined(_WIN32)
 #define NATS_PATH_SEP '\\'
+#define NATS_SYS_SOCK_INVALID INVALID_SOCKET
+typedef INIT_ONCE natsSysOnce;
+#define NATS_SYS_ONCE_INIT INIT_ONCE_STATIC_INIT
 #else
 #define NATS_PATH_SEP '/'
+#define NATS_SYS_SOCK_INVALID (-1)
+typedef pthread_once_t natsSysOnce;
+#define NATS_SYS_ONCE_INIT PTHREAD_ONCE_INIT
 #endif
 
 #define nats_IsStringEmpty(s) ((((s) == NULL) || ((s)[0] == '\0')) ? true : false)
@@ -73,6 +79,41 @@ bool natsSys_IsAbsPath(const char *path);
 // the program is not on the PATH, NATS_ERR when it cannot be started or dies
 // on a signal.
 natsStatus natsSys_RunCommand(const char *const *args, char **out, int *exitCode);
+
+// Runs 'cb' on the first call for 'once', with any other thread reaching the
+// same 'once' held until that call returns. 'once' must be a variable of static
+// storage duration initialized to NATS_SYS_ONCE_INIT.
+void natsSys_Once(natsSysOnce *once, void (*cb)(void));
+
+// Client TCP sockets, for reaching a host the library has to talk to before
+// nats.c takes the connection over (a SOCKS proxy, say).
+//
+// Winsock startup is left to nats.c: nats_Open() has already run by the time
+// anything here is reachable, and calling WSAStartup() again would only add a
+// WSACleanup() that no one is in a position to make.
+//
+// 'deadline' is an absolute time on the nats_Now() clock, so that one budget
+// can span a whole exchange; a call that cannot finish before it returns
+// NATS_TIMEOUT.
+
+// Connects to 'host' on 'port' and returns the socket in *fd, left
+// non-blocking and carrying the same options nats.c sets on the sockets it
+// connects itself (TCP_NODELAY, SO_REUSEADDR and an abortive SO_LINGER), so
+// that a socket handed over to it is indistinguishable from one of its own.
+natsStatus natsSys_SockConnect(natsSock *fd, const char *host, int port, int64_t deadline);
+
+// Sends, or receives, exactly 'len' bytes, waiting on the socket as needed.
+// A peer that closes mid-exchange is reported as NATS_CONNECTION_CLOSED.
+natsStatus natsSys_SockWrite(natsSock fd, const void *data, size_t len, int64_t deadline);
+natsStatus natsSys_SockRead(natsSock fd, void *data, size_t len, int64_t deadline);
+
+// Parses 'host' as a numeric IPv4 or IPv6 address, writing its network-order
+// bytes to 'ip' (which must hold 16) and their count to *len. Returns
+// NATS_NOT_FOUND when 'host' is not a numeric address, i.e. is a name.
+natsStatus natsSys_SockParseIP(const char *host, unsigned char *ip, int *len);
+
+// Closes 'fd'; NATS_SYS_SOCK_INVALID is a no-op.
+void natsSys_SockClose(natsSock fd);
 
 natsStatus natsMutex_Create(natsMutex **newMutex);
 bool       natsMutex_TryLock(natsMutex *m);
