@@ -345,17 +345,77 @@ sysclient_ping(void ***resps, int *count, natsSysClient *client, const char *sub
     return s;
 }
 
+natsStatus
+sysclient_buildWalks(void ***walks, int *walkCount, natsSysClient *client, void ***pages,
+                     int *pageCount, const void *opts, const sysWalkOps *ops)
+{
+    natsStatus s = NATS_OK;
+    void     **arr;
+    int        count;
+    int        i;
+
+    if ((walks == NULL) || (walkCount == NULL) || (client == NULL) || (pages == NULL)
+        || (pageCount == NULL) || (ops == NULL) || (ops->WalkSize == 0)
+        || (ops->InitWalk == NULL) || (ops->DestroyWalk == NULL)
+        || (ops->DestroyPage == NULL))
+        return NATS_INVALID_ARG;
+
+    *walks     = NULL;
+    *walkCount = 0;
+
+    count = *pageCount;
+    if (count == 0)
+    {
+        sysclient_freeRespList(pages, pageCount, ops->DestroyPage);
+        return NATS_OK;
+    }
+
+    arr = (void **) NATS_CALLOC((size_t) count, sizeof(void *));
+    if (arr == NULL)
+    {
+        sysclient_freeRespList(pages, pageCount, ops->DestroyPage);
+        return NATS_NO_MEMORY;
+    }
+
+    for (i = 0; (i < count) && (s == NATS_OK); i++)
+    {
+        arr[i] = NATS_CALLOC(1, ops->WalkSize);
+        if (arr[i] == NULL)
+        {
+            s = NATS_NO_MEMORY;
+            break;
+        }
+
+        // the slot is cleared to keep the release below from freeing it a second time
+        s = ops->InitWalk(arr[i], client, opts, (*pages)[i]);
+        if (s == NATS_OK)
+            (*pages)[i] = NULL;
+    }
+
+    sysclient_freeRespList(pages, pageCount, ops->DestroyPage);
+
+    if (s != NATS_OK)
+    {
+        sysclient_freeRespList(&arr, &count, ops->DestroyWalk);
+        return s;
+    }
+
+    *walks     = arr;
+    *walkCount = count;
+    return NATS_OK;
+}
+
 void
 sysclient_freeRespList(void ***resps, int *count, sysRespDestroyFn destroyResp)
 {
     void **arr;
     int    i;
 
-    if ((resps == NULL) || (count == NULL))
+    if ((resps == NULL) || (count == NULL) || (destroyResp == NULL))
         return;
 
     arr = *resps;
-    for (i = 0; (arr != NULL) && (destroyResp != NULL) && (i < *count); i++)
+    for (i = 0; (arr != NULL) && (i < *count); i++)
         destroyResp(arr[i]);
 
     NATS_FREE(arr);

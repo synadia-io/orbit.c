@@ -39,11 +39,7 @@ static const sysField _healthzFields[] = {
 natsStatus
 natsSysHealthzOptions_Init(natsSysHealthzOptions *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
-
-    memset(opts, 0, sizeof(*opts));
-    return NATS_OK;
+    return sysclient_initOpts(opts, sizeof(*opts));
 }
 
 // Every field is optional, so a zeroed options struct marshals to "{}".

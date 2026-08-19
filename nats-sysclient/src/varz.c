@@ -178,11 +178,7 @@ static const sysField _varzFields[] = {
 natsStatus
 natsSysVarzOptions_Init(natsSysVarzOptions *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
-
-    memset(opts, 0, sizeof(*opts));
-    return NATS_OK;
+    return sysclient_initOpts(opts, sizeof(*opts));
 }
 
 // VARZ has no options of its own, so the request is the five optional server
@@ -191,16 +187,8 @@ static natsStatus
 _marshalOptions(natsBuffer *buf, const void *optsv)
 {
     const natsSysVarzOptions *opts = (const natsSysVarzOptions *) optsv;
-    natsJSONWriter w;
 
-    natsJSONWriter_Init(&w, buf);
-    natsJSONWriter_StartObject(&w);
-
-    if (opts != NULL)
-        sysclient_writeEventFilter(&w, &opts->Filter);
-
-    natsJSONWriter_EndObject(&w);
-    return natsJSONWriter_Status(&w);
+    return sysclient_marshalFilterOnly(buf, (opts != NULL) ? &opts->Filter : NULL);
 }
 
 //
@@ -391,7 +379,7 @@ _parseHTTPReqStats(natsSysVarz *varz, natsJSON *node)
             if (arr[i].Path == NULL)
                 s = NATS_NO_MEMORY;
         }
-        if (s == NATS_OK)
+        if ((s == NATS_OK) && (natsJSON_Type(value) != NATS_JSON_NULL))
             s = natsJSON_AsUInt(value, &arr[i].Count);
 
         if (s != NATS_OK)

@@ -61,3 +61,17 @@ sysclient_writeEventFilter(natsJSONWriter *w, const natsSysEventFilterOptions *f
 
     return natsJSONWriter_Status(w);
 }
+
+natsStatus
+sysclient_marshalFilterOnly(natsBuffer *buf, const natsSysEventFilterOptions *filter)
+{
+    natsJSONWriter w;
+
+    natsJSONWriter_Init(&w, buf);
+    natsJSONWriter_StartObject(&w);
+
+    sysclient_writeEventFilter(&w, filter);
+
+    natsJSONWriter_EndObject(&w);
+    return natsJSONWriter_Status(&w);
+}

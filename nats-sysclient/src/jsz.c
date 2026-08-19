@@ -72,11 +72,7 @@ static const sysField _jsInfoFields[] = {
 natsStatus
 natsSysJszOptions_Init(natsSysJszOptions *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
-
-    memset(opts, 0, sizeof(*opts));
-    return NATS_OK;
+    return sysclient_initOpts(opts, sizeof(*opts));
 }
 
 // Every field is optional, so a zeroed options struct marshals to "{}".
@@ -398,15 +394,39 @@ _walkDestroy(void *w)
     NATS_FREE(walk);
 }
 
+static natsStatus
+_initWalk(void *walkv, natsSysClient *client, const void *optsv, void *pagev)
+{
+    natsSysJszWalk *walk = (natsSysJszWalk *) walkv;
+    natsSysJszResp *page = (natsSysJszResp *) pagev;
+    natsStatus      s;
+
+    walk->client = client;
+
+    s = sysclient_walkServerID(&walk->serverID, page->Server.ID);
+    IFOK(s, _copyOptions(&walk->opts, (const natsSysJszOptions *) optsv));
+    if (s != NATS_OK)
+        return s;
+
+    walk->first  = page;
+    walk->total  = page->JSInfo.JetStreamStats.Accounts;
+    walk->offset = walk->opts.Offset;
+    return NATS_OK;
+}
+
+static const sysWalkOps _walkOps = {
+    sizeof(natsSysJszWalk),
+    _initWalk,
+    _walkDestroy,
+    _destroyResp,
+};
+
 natsStatus
 natsSysClient_JszPingEach(natsSysJszWalkList *list, natsSysClient *client,
                           const natsSysJszOptions *opts, int64_t timeout)
 {
-    natsStatus         s;
     natsSysJszRespList pages = {NULL, 0};
-    natsSysJszWalk   **walks;
-    int                count;
-    int                i;
+    natsStatus          s;
 
     if ((list == NULL) || (client == NULL))
         return NATS_INVALID_ARG;
@@ -420,59 +440,9 @@ natsSysClient_JszPingEach(natsSysJszWalkList *list, natsSysClient *client,
         natsSysJszRespList_Destroy(&pages);
         return s;
     }
-    if (pages.Count == 0)
-    {
-        natsSysJszRespList_Destroy(&pages);
-        return NATS_OK;
-    }
 
-    // Captured before the list is destroyed below, which zeroes its Count.
-    count = pages.Count;
-
-    walks = (natsSysJszWalk **) NATS_CALLOC((size_t) count, sizeof(natsSysJszWalk *));
-    if (walks == NULL)
-    {
-        natsSysJszRespList_Destroy(&pages);
-        return NATS_NO_MEMORY;
-    }
-
-    for (i = 0; (i < count) && (s == NATS_OK); i++)
-    {
-        natsSysJszWalk *walk;
-
-        walk = (natsSysJszWalk *) NATS_CALLOC(1, sizeof(natsSysJszWalk));
-        if (walk == NULL)
-        {
-            s = NATS_NO_MEMORY;
-            break;
-        }
-        walks[i] = walk;
-
-        walk->client = client;
-
-        s = sysclient_walkServerID(&walk->serverID, pages.Resps[i]->Server.ID);
-        IFOK(s, _copyOptions(&walk->opts, opts));
-
-        if (s == NATS_OK)
-        {
-            walk->first    = pages.Resps[i];
-            pages.Resps[i] = NULL;
-            walk->total    = walk->first->JSInfo.JetStreamStats.Accounts;
-            walk->offset   = walk->opts.Offset;
-        }
-    }
-
-    natsSysJszRespList_Destroy(&pages);
-
-    if (s != NATS_OK)
-    {
-        sysclient_freeRespList((void ***) &walks, &count, _walkDestroy);
-        return s;
-    }
-
-    list->Walks = walks;
-    list->Count = count;
-    return NATS_OK;
+    return sysclient_buildWalks((void ***) &list->Walks, &list->Count, client,
+                                (void ***) &pages.Resps, &pages.Count, opts, &_walkOps);
 }
 
 const char *

@@ -55,11 +55,7 @@ static const sysField _serverStatsFields[] = {
 natsStatus
 natsSysStatszOptions_Init(natsSysStatszOptions *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
-
-    memset(opts, 0, sizeof(*opts));
-    return NATS_OK;
+    return sysclient_initOpts(opts, sizeof(*opts));
 }
 
 // STATSZ has no options of its own, so the request is the five optional server
@@ -68,16 +64,8 @@ static natsStatus
 _marshalOptions(natsBuffer *buf, const void *optsv)
 {
     const natsSysStatszOptions *opts = (const natsSysStatszOptions *) optsv;
-    natsJSONWriter w;
 
-    natsJSONWriter_Init(&w, buf);
-    natsJSONWriter_StartObject(&w);
-
-    if (opts != NULL)
-        sysclient_writeEventFilter(&w, &opts->Filter);
-
-    natsJSONWriter_EndObject(&w);
-    return natsJSONWriter_Status(&w);
+    return sysclient_marshalFilterOnly(buf, (opts != NULL) ? &opts->Filter : NULL);
 }
 
 static natsStatus

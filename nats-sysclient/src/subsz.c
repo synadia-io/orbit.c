@@ -23,12 +23,6 @@
 // closely. A shared driver would be shorter, and this is the price of not
 // having one.
 //
-// What is *not* defended: the surrounding _PingEach, _copyOptions and
-// _freeOptionsCopy scaffolding is duplicated too, and none of it touches a
-// typed payload member — so the argument above says nothing about it. It is
-// still triplicated only because collapsing it has not been worth a separate
-// change; if a fourth paginated endpoint ever appears, hoist that half first.
-//
 // Note the page loop is the opposite call from the request/ping path in
 // sysclient.c, where the type erasure is confined to an options pointer that
 // each _marshalOptions re-types on its first line.
@@ -77,11 +71,7 @@ static const sysField _subszFields[] = {
 natsStatus
 natsSysSubszOptions_Init(natsSysSubszOptions *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
-
-    memset(opts, 0, sizeof(*opts));
-    return NATS_OK;
+    return sysclient_initOpts(opts, sizeof(*opts));
 }
 
 // SUBSZ is the mixed case: offset, limit and subscriptions are always emitted,
@@ -332,15 +322,42 @@ _walkDestroy(void *w)
     NATS_FREE(walk);
 }
 
+// The two assignments that read the page are the reason this stays here rather
+// than moving into the shared driver: both are compiler-checked against the
+// SUBSZ response type.
+static natsStatus
+_initWalk(void *walkv, natsSysClient *client, const void *optsv, void *pagev)
+{
+    natsSysSubszWalk *walk = (natsSysSubszWalk *) walkv;
+    natsSysSubszResp *page = (natsSysSubszResp *) pagev;
+    natsStatus      s;
+
+    walk->client = client;
+
+    s = sysclient_walkServerID(&walk->serverID, page->Server.ID);
+    IFOK(s, _copyOptions(&walk->opts, (const natsSysSubszOptions *) optsv));
+    if (s != NATS_OK)
+        return s;
+
+    walk->first  = page;
+    walk->total  = page->Subsz.Total;
+    walk->offset = walk->opts.Offset;
+    return NATS_OK;
+}
+
+static const sysWalkOps _walkOps = {
+    sizeof(natsSysSubszWalk),
+    _initWalk,
+    _walkDestroy,
+    _destroyResp,
+};
+
 natsStatus
 natsSysClient_SubszPingEach(natsSysSubszWalkList *list, natsSysClient *client,
-                            const natsSysSubszOptions *opts, int64_t timeout)
+                          const natsSysSubszOptions *opts, int64_t timeout)
 {
-    natsStatus           s;
     natsSysSubszRespList pages = {NULL, 0};
-    natsSysSubszWalk   **walks;
-    int                  count;
-    int                  i;
+    natsStatus          s;
 
     if ((list == NULL) || (client == NULL))
         return NATS_INVALID_ARG;
@@ -354,59 +371,9 @@ natsSysClient_SubszPingEach(natsSysSubszWalkList *list, natsSysClient *client,
         natsSysSubszRespList_Destroy(&pages);
         return s;
     }
-    if (pages.Count == 0)
-    {
-        natsSysSubszRespList_Destroy(&pages);
-        return NATS_OK;
-    }
 
-    // Captured before the list is destroyed below, which zeroes its Count.
-    count = pages.Count;
-
-    walks = (natsSysSubszWalk **) NATS_CALLOC((size_t) count, sizeof(natsSysSubszWalk *));
-    if (walks == NULL)
-    {
-        natsSysSubszRespList_Destroy(&pages);
-        return NATS_NO_MEMORY;
-    }
-
-    for (i = 0; (i < count) && (s == NATS_OK); i++)
-    {
-        natsSysSubszWalk *walk;
-
-        walk = (natsSysSubszWalk *) NATS_CALLOC(1, sizeof(natsSysSubszWalk));
-        if (walk == NULL)
-        {
-            s = NATS_NO_MEMORY;
-            break;
-        }
-        walks[i] = walk;
-
-        walk->client = client;
-
-        s = sysclient_walkServerID(&walk->serverID, pages.Resps[i]->Server.ID);
-        IFOK(s, _copyOptions(&walk->opts, opts));
-
-        if (s == NATS_OK)
-        {
-            walk->first    = pages.Resps[i];
-            pages.Resps[i] = NULL;
-            walk->total    = walk->first->Subsz.Total;
-            walk->offset   = walk->opts.Offset;
-        }
-    }
-
-    natsSysSubszRespList_Destroy(&pages);
-
-    if (s != NATS_OK)
-    {
-        sysclient_freeRespList((void ***) &walks, &count, _walkDestroy);
-        return s;
-    }
-
-    list->Walks = walks;
-    list->Count = count;
-    return NATS_OK;
+    return sysclient_buildWalks((void ***) &list->Walks, &list->Count, client,
+                                (void ***) &pages.Resps, &pages.Count, opts, &_walkOps);
 }
 
 const char *

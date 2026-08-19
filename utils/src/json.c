@@ -707,15 +707,16 @@ natsJSON_AsNumber(const natsJSON *json, double *out)
 natsStatus
 natsJSON_AsInt(const natsJSON *json, int64_t *out)
 {
+    int64_t val;
     if ((json == NULL) || (out == NULL) || (json->type != NATS_JSON_NUMBER))
         return NATS_INVALID_ARG;
-    errno = 0;
-    *out  = (int64_t) strtoll(json->v.str, NULL, 10);
 
-    // Without this a literal too large for the type saturates to INT64_MAX and
-    // is stored as though the server had sent it.
+    errno = 0;
+    val = (int64_t) strtoll(json->v.str, NULL, 10);
+
     if (errno == ERANGE)
         return NATS_INVALID_ARG;
+    *out = val;
     return NATS_OK;
 }
 
@@ -725,8 +726,6 @@ natsJSON_AsUInt(const natsJSON *json, uint64_t *out)
     if ((json == NULL) || (out == NULL) || (json->type != NATS_JSON_NUMBER))
         return NATS_INVALID_ARG;
 
-    // strtoull happily turns "-1" into ULLONG_MAX. A negative literal is not an
-    // unsigned value, so reject it rather than hand back 1.8e19.
     if (json->v.str[0] == '-')
         return NATS_INVALID_ARG;
 
@@ -975,10 +974,14 @@ natsJSON_ArrayGet(const natsJSON *json, int idx, natsJSON **out)
 static natsStatus
 _writeQuoted(natsBuffer *b, const char *s)
 {
-    natsStatus  st  = natsBuf_AppendByte(b, '"');
+    natsStatus  st  = NATS_OK;
     const char *run = s; // start of the current escape-free span
     const char *p   = s;
 
+    if ((b == NULL) || (s == NULL))
+        return NATS_INVALID_ARG;
+
+    st = natsBuf_AppendByte(b, '"');
     // Real JSON is overwhelmingly escape-free, so bytes are accumulated into
     // runs and flushed with one append rather than appended one at a time.
     for (; (*p != '\0') && (st == NATS_OK); p++)

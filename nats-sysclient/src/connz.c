@@ -86,11 +86,7 @@ static const sysField _connzFields[] = {
 natsStatus
 natsSysConnzOptions_Init(natsSysConnzOptions *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
-
-    memset(opts, 0, sizeof(*opts));
-    return NATS_OK;
+    return sysclient_initOpts(opts, sizeof(*opts));
 }
 
 // Every CONNZ field is emitted whatever its value — an "empty" request still
@@ -373,15 +369,39 @@ _walkDestroy(void *w)
     NATS_FREE(walk);
 }
 
+static natsStatus
+_initWalk(void *walkv, natsSysClient *client, const void *optsv, void *pagev)
+{
+    natsSysConnzWalk *walk = (natsSysConnzWalk *) walkv;
+    natsSysConnzResp *page = (natsSysConnzResp *) pagev;
+    natsStatus        s;
+
+    walk->client = client;
+
+    s = sysclient_walkServerID(&walk->serverID, page->Server.ID);
+    IFOK(s, _copyOptions(&walk->opts, (const natsSysConnzOptions *) optsv));
+    if (s != NATS_OK)
+        return s;
+
+    walk->first  = page;
+    walk->total  = page->Connz.Total;
+    walk->offset = walk->opts.Offset;
+    return NATS_OK;
+}
+
+static const sysWalkOps _walkOps = {
+    sizeof(natsSysConnzWalk),
+    _initWalk,
+    _walkDestroy,
+    _destroyResp,
+};
+
 natsStatus
 natsSysClient_ConnzPingEach(natsSysConnzWalkList *list, natsSysClient *client,
                             const natsSysConnzOptions *opts, int64_t timeout)
 {
-    natsStatus           s;
     natsSysConnzRespList pages = {NULL, 0};
-    natsSysConnzWalk   **walks;
-    int                  count;
-    int                  i;
+    natsStatus           s;
 
     if ((list == NULL) || (client == NULL))
         return NATS_INVALID_ARG;
@@ -395,61 +415,9 @@ natsSysClient_ConnzPingEach(natsSysConnzWalkList *list, natsSysClient *client,
         natsSysConnzRespList_Destroy(&pages);
         return s;
     }
-    if (pages.Count == 0)
-    {
-        natsSysConnzRespList_Destroy(&pages);
-        return NATS_OK;
-    }
 
-    // Captured before the list is destroyed below, which zeroes its Count.
-    count = pages.Count;
-
-    walks = (natsSysConnzWalk **) NATS_CALLOC((size_t) count, sizeof(natsSysConnzWalk *));
-    if (walks == NULL)
-    {
-        natsSysConnzRespList_Destroy(&pages);
-        return NATS_NO_MEMORY;
-    }
-
-    for (i = 0; (i < count) && (s == NATS_OK); i++)
-    {
-        natsSysConnzWalk *walk;
-
-        walk = (natsSysConnzWalk *) NATS_CALLOC(1, sizeof(natsSysConnzWalk));
-        if (walk == NULL)
-        {
-            s = NATS_NO_MEMORY;
-            break;
-        }
-        walks[i] = walk;
-
-        walk->client = client;
-
-        s = sysclient_walkServerID(&walk->serverID, pages.Resps[i]->Server.ID);
-        IFOK(s, _copyOptions(&walk->opts, opts));
-
-        if (s == NATS_OK)
-        {
-            // Adopt the page the ping already produced. The slot is cleared so
-            // destroying the list below cannot free it a second time.
-            walk->first    = pages.Resps[i];
-            pages.Resps[i] = NULL;
-            walk->total    = walk->first->Connz.Total;
-            walk->offset   = walk->opts.Offset;
-        }
-    }
-
-    natsSysConnzRespList_Destroy(&pages);
-
-    if (s != NATS_OK)
-    {
-        sysclient_freeRespList((void ***) &walks, &count, _walkDestroy);
-        return s;
-    }
-
-    list->Walks = walks;
-    list->Count = count;
-    return NATS_OK;
+    return sysclient_buildWalks((void ***) &list->Walks, &list->Count, client,
+                                (void ***) &pages.Resps, &pages.Count, opts, &_walkOps);
 }
 
 const char *

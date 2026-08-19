@@ -54,4 +54,8 @@ sysclient_optStrArray(natsJSONWriter *w, const char *key, const char *const *val
 natsStatus
 sysclient_writeEventFilter(natsJSONWriter *w, const natsSysEventFilterOptions *filter);
 
+// Marshals a whole request whose only content is the server filter.
+natsStatus
+sysclient_marshalFilterOnly(natsBuffer *buf, const natsSysEventFilterOptions *filter);
+
 #endif /* NATS_SYSCLIENT_MARSHAL_H_ */

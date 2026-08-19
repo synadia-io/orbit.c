@@ -28,6 +28,8 @@
 #include "unmarshal.h"
 
 #include <nats/nats.h>
+#include <stddef.h>
+#include <string.h>
 
 // Request subjects. The single %s is replaced either with a server ID or with
 // the literal "PING" to scatter to the whole cluster.
@@ -141,6 +143,35 @@ sysclient_pingList(void ***resps, int *count, natsSysClient *client, const char 
                    const char *payload, int payloadLen, int64_t timeout,
                    sysRespFromMsgFn fromMsg, sysRespDestroyFn destroyResp);
 
+/** Fills one freshly-calloc'd walk from a page the ping produced.
+ *
+ * 'opts' is the endpoint's own options type and may be NULL, meaning defaults;
+ * each implementation re-types it, as sysMarshalFn does. On NATS_OK the walk
+ * has adopted 'page' and the caller must not release it; on any other status
+ * ownership stays with the caller.
+ */
+typedef natsStatus (*sysWalkInitFn)(void *walk, natsSysClient *client, const void *opts,
+                                    void *page);
+
+/** How to build and release one endpoint's walks. */
+typedef struct
+{
+    size_t           WalkSize;    ///< sizeof the endpoint's walk struct.
+    sysWalkInitFn    InitWalk;    ///< Fills one walk from one page.
+    sysRespDestroyFn DestroyWalk; ///< Releases a walk, including the walk itself.
+    sysRespDestroyFn DestroyPage; ///< Releases a page the ping produced.
+
+} sysWalkOps;
+
+// Turns a list of ping replies into a list of walks, one per responding server.
+//
+// Consumes 'pages' whatever the outcome, releasing every page a walk did not
+// adopt and zeroing both of its out-params. On failure no walk survives and
+// *walks is NULL. An empty 'pages' is not an error: it yields an empty list.
+natsStatus
+sysclient_buildWalks(void ***walks, int *walkCount, natsSysClient *client, void ***pages,
+                     int *pageCount, const void *opts, const sysWalkOps *ops);
+
 void
 sysclient_freeServerInfo(natsSysServerInfo *server);
 
@@ -245,6 +276,20 @@ sysclient_capTimeout(int64_t timeout);
 // A whole-walk deadline 'timeout' milliseconds from now, capped as above.
 int64_t
 sysclient_deadline(int64_t timeout);
+
+// The body of every natsSys*Options_Init: reject a NULL out-param, otherwise
+// zero the struct. Each public function stays a real symbol rather than a macro
+// expansion so it remains greppable and steppable; only the shared policy --
+// which status a NULL gets, and that "default" means "zeroed" -- lives here.
+static inline natsStatus
+sysclient_initOpts(void *opts, size_t size)
+{
+    if (opts == NULL)
+        return NATS_INVALID_ARG;
+
+    memset(opts, 0, size);
+    return NATS_OK;
+}
 
 // Maps an accessor-level failure onto the status the public API documents.
 //

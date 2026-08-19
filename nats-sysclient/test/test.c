@@ -1606,6 +1606,30 @@ test_VarzDefaults(void)
              && (resp->Varz.OCSPResponseCache == NULL)
              && (resp->Varz.HTTPReqStats == NULL));
 
+    // http_req_stats is the one map on the wire, so its values are decoded
+    // outside the field table. They follow the same null rule regardless.
+    test("A null map value leaves a zero count: ");
+    natsSysVarzResp_Destroy(resp);
+    resp     = NULL;
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":"
+               "{\"http_req_stats\":{\"/varz\":7,\"/connz\":null}}}";
+    s        = natsSysClient_Varz(&resp, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_OK) && (resp != NULL) && (resp->Varz.HTTPReqStatsCount == 2)
+             && (strcmp(resp->Varz.HTTPReqStats[0].Path, "/varz") == 0)
+             && (resp->Varz.HTTPReqStats[0].Count == 7)
+             && (strcmp(resp->Varz.HTTPReqStats[1].Path, "/connz") == 0)
+             && (resp->Varz.HTTPReqStats[1].Count == 0));
+
+    // The other half of the rule: tolerating null must not mean tolerating a
+    // value that is simply the wrong type.
+    test("A wrong-typed map value is still rejected: ");
+    natsSysVarzResp_Destroy(resp);
+    resp     = NULL;
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":"
+               "{\"http_req_stats\":{\"/varz\":\"seven\"}}}";
+    s        = natsSysClient_Varz(&resp, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_ERR) && (resp == NULL));
+
     natsSysVarzResp_Destroy(resp);
     natsSubscription_Destroy(sub);
     TEARDOWN;
