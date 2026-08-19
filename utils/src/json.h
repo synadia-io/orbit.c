@@ -24,6 +24,8 @@
 #ifndef ORBIT_JSON_H_
 #define ORBIT_JSON_H_
 
+#include "buf.h"
+
 #include <nats/nats.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -83,8 +85,16 @@ natsJSON_AsNumber(const natsJSON *json, double *out);
 
 // Interprets a number node as a 64-bit integer (the integer part; any
 // fractional or exponent part is ignored).
+// Returns NATS_INVALID_ARG for a non-number, and for a literal too large for
+// the type rather than storing a saturated value the server never sent.
 natsStatus
 natsJSON_AsInt(const natsJSON *json, int64_t *out);
+
+// As natsJSON_AsInt, but unsigned. Use this for wire fields declared uint64:
+// natsJSON_AsInt rejects anything above INT64_MAX, so a counter above that
+// silently clamped.
+natsStatus
+natsJSON_AsUInt(const natsJSON *json, uint64_t *out);
 
 // Sets *out to the node's decoded string. The pointer is borrowed from the
 // tree and must not be freed.
@@ -134,6 +144,9 @@ natsJSON_GetNumber(const natsJSON *json, const char *key, double *out);
 natsStatus
 natsJSON_GetInt(const natsJSON *json, const char *key, int64_t *out);
 
+natsStatus
+natsJSON_GetUInt(const natsJSON *json, const char *key, uint64_t *out);
+
 // Extracts a JSON array of strings into a freshly allocated array of heap
 // strings. On success *out holds *count entries (or NULL when *count is 0); the
 // caller frees each entry and then the array. Returns NATS_INVALID_ARG when the
@@ -154,6 +167,91 @@ natsJSON_ArraySize(const natsJSON *json);
 // NATS_INVALID_ARG when 'json' is not an array or 'idx' is out of range.
 natsStatus
 natsJSON_ArrayGet(const natsJSON *json, int idx, natsJSON **out);
+
+//
+// Serialization.
+//
+
+// Appends the JSON text of 'json' to 'out'. Numbers are emitted from the
+// literal text captured at parse time, so a parse/write round trip preserves
+// them exactly; object members keep their document order. Nothing is written
+// on error. Returns NATS_INVALID_ARG for NULL arguments.
+//
+// Use this to hand back a subtree of a parsed document as raw JSON.
+natsStatus
+natsJSON_Write(const natsJSON *json, natsBuffer *out);
+
+//
+// Writer — builds a JSON object incrementally into a natsBuffer.
+//
+// Errors are sticky: once a call fails, later calls are no-ops that return the
+// original status, so a long run of field appends can be checked once at the
+// end with natsJSONWriter_Status(). The writer borrows the buffer and owns
+// nothing, so there is nothing to destroy.
+//
+// Typical use:
+//
+//     natsBuffer     buf = NATS_EMPTY_BUFFER;
+//     natsJSONWriter w;
+//
+//     natsBuf_Init(&buf, 256);
+//     natsJSONWriter_Init(&w, &buf);
+//     natsJSONWriter_StartObject(&w);
+//     if (!nats_IsStringEmpty(opts->Account))
+//         natsJSONWriter_AddStr(&w, "account", opts->Account);
+//     if (opts->Details)
+//         natsJSONWriter_AddBool(&w, "details", true);
+//     natsJSONWriter_EndObject(&w);
+//     s = natsJSONWriter_Status(&w);
+//
+typedef struct __natsJSONWriter
+{
+    natsBuffer *buf;
+    natsStatus  st;        // sticky: first error encountered
+    int         depth;     // number of open objects
+    bool        needComma; // whether a separator precedes the next member
+
+} natsJSONWriter;
+
+// Binds 'w' to 'buf'. The buffer is not reset, so a writer can append to a
+// buffer that already holds data. Returns NATS_INVALID_ARG for NULL arguments.
+natsStatus
+natsJSONWriter_Init(natsJSONWriter *w, natsBuffer *buf);
+
+// Returns the first error the writer encountered, or NATS_OK.
+natsStatus
+natsJSONWriter_Status(const natsJSONWriter *w);
+
+// Opens an object.
+natsStatus
+natsJSONWriter_StartObject(natsJSONWriter *w);
+
+// Closes the innermost open object. Returns NATS_ERR if none is open.
+natsStatus
+natsJSONWriter_EndObject(natsJSONWriter *w);
+
+//
+// Member appenders. Each writes `"key":<value>`, preceded by a comma when the
+// enclosing object already has a member. A NULL 'val' for a string member is
+// written as an empty string, which is what an unset C string means on the
+// wire; pass the field conditionally to omit it entirely.
+//
+
+natsStatus
+natsJSONWriter_AddStr(natsJSONWriter *w, const char *key, const char *val);
+
+natsStatus
+natsJSONWriter_AddBool(natsJSONWriter *w, const char *key, bool val);
+
+natsStatus
+natsJSONWriter_AddInt(natsJSONWriter *w, const char *key, int64_t val);
+
+natsStatus
+natsJSONWriter_AddUInt(natsJSONWriter *w, const char *key, uint64_t val);
+
+// Writes an array of strings. A NULL 'vals' or a 'count' of 0 writes `[]`.
+natsStatus
+natsJSONWriter_AddStrArray(natsJSONWriter *w, const char *key, const char *const *vals, int count);
 
 #ifdef __cplusplus
 }
