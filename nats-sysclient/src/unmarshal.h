@@ -94,7 +94,9 @@ typedef struct
 
 // Decodes every field in 'fields' from 'obj' into 'dst'.
 //
-// 'dst' must be zeroed beforehand. A key that is missing or JSON null leaves
+// 'dst' must be zeroed beforehand. String members are moved out of the tree
+// rather than copied (natsJSON_TakeStr), so a key is decoded once: a second
+// scan of the same key on the same node finds it null. A key that is missing or JSON null leaves
 // the member at its zero value. A key present with the wrong type returns
 // NATS_INVALID_ARG; callers map that through sysclient_responseStatus().
 //
@@ -110,9 +112,10 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n);
 void
 sysclient_freeFields(void *dst, const sysField *fields, int n);
 
-// Re-serializes the object or array at 'key' into a freshly allocated string.
-// Sets *out to NULL when the key is absent or null. Used for subtrees that
-// have no portable C representation — see the JSZ and VARZ headers.
+// Copies the input text of the value at 'key' into a freshly allocated string,
+// verbatim (natsJSON_Raw). Sets *out to NULL when the key is absent or null.
+// Used for subtrees that have no portable C representation — see the JSZ and
+// VARZ headers.
 natsStatus
 sysclient_rawJSONField(char **out, natsJSON *obj, const char *key);
 
@@ -160,7 +163,7 @@ sysclient_objectPtr(void **out, natsJSON *obj, const char *key, size_t size,
 void
 sysclient_freeObjectPtr(void **out, sysFreeFn freeElem);
 
-// Re-serializes each element of the array at 'key' into its own string, for
+// Copies each element of the array at 'key' into its own string, verbatim, for
 // arrays of subtrees that have no portable C representation. *out is NULL and
 // *count 0 when the key is absent, null or an empty array.
 natsStatus

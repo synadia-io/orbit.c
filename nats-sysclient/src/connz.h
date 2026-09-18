@@ -94,7 +94,7 @@ typedef struct __natsSysConnInfo
     char    *RTT;          ///< Last measured round trip, as the server's own string.
     char    *Uptime;       ///< Connection age, as the server's own string.
     char    *Idle;         ///< Idle time, as the server's own string.
-    int      Pending;      ///< Bytes waiting to be written (wire key `pending_bytes`).
+    int64_t  Pending;      ///< Bytes waiting to be written (wire key `pending_bytes`).
     int64_t  InMsgs;       ///< Messages received from this connection.
     int64_t  OutMsgs;      ///< Messages sent to this connection.
     int64_t  InBytes;      ///< Bytes received from this connection.

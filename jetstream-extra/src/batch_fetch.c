@@ -14,6 +14,7 @@
 #include "batch_fetch.h"
 
 #include "buf.h"
+#include "json.h"
 #include "os_shims.h" // nats_gmtime + public nats time API
 
 #include <stdlib.h>
@@ -32,14 +33,6 @@
 
 #define INITIAL_LIST_CAP 16
 
-#define COMMA_IF_NEEDED                       \
-    do                                        \
-    {                                         \
-        if (s == NATS_OK && comma)            \
-            s = natsBuf_AppendByte(out, ','); \
-        comma = true;                         \
-    } while (0)
-
 natsStatus
 jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
 {
@@ -49,212 +42,83 @@ jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
     return NATS_OK;
 }
 
-// JSON helpers
-
+// Formats a nanosecond Unix time as RFC 3339 with nanosecond precision, the
+// form the server expects for start_time and up_to_time.
 static natsStatus
-_jsonAppendStringQuoted(natsBuffer *b, const char *s)
-{
-    natsStatus st = natsBuf_AppendByte(b, '"');
-    const char *p;
-
-    for (p = s; *p != '\0' && st == NATS_OK; p++)
-    {
-        unsigned char c = (unsigned char)*p;
-        switch (c)
-        {
-            case '"':
-                st = natsBuf_Append(b, "\\\"", 2);
-                break;
-            case '\\':
-                st = natsBuf_Append(b, "\\\\", 2);
-                break;
-            case '\b':
-                st = natsBuf_Append(b, "\\b", 2);
-                break;
-            case '\f':
-                st = natsBuf_Append(b, "\\f", 2);
-                break;
-            case '\n':
-                st = natsBuf_Append(b, "\\n", 2);
-                break;
-            case '\r':
-                st = natsBuf_Append(b, "\\r", 2);
-                break;
-            case '\t':
-                st = natsBuf_Append(b, "\\t", 2);
-                break;
-            default:
-                if (c < 0x20)
-                {
-                    char buf[8];
-                    int n = snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    st = natsBuf_Append(b, buf, n);
-                }
-                else
-                {
-                    st = natsBuf_AppendByte(b, (char)c);
-                }
-                break;
-        }
-    }
-    if (st == NATS_OK)
-        st = natsBuf_AppendByte(b, '"');
-    return st;
-}
-
-static natsStatus
-_jsonAppendU64(natsBuffer *b, uint64_t v)
-{
-    char tmp[32];
-    int n = snprintf(tmp, sizeof(tmp), "%" PRIu64, v);
-    if (n < 0 || n >= (int)sizeof(tmp))
-        return NATS_ERR;
-    return natsBuf_Append(b, tmp, n);
-}
-
-static natsStatus
-_jsonAppendInt(natsBuffer *b, int v)
-{
-    char tmp[16];
-    int n = snprintf(tmp, sizeof(tmp), "%d", v);
-    if (n < 0 || n >= (int)sizeof(tmp))
-        return NATS_ERR;
-    return natsBuf_Append(b, tmp, n);
-}
-
-static natsStatus
-_jsonAppendTimeRFC3339(natsBuffer *b, uint64_t nsec)
+_formatTimeRFC3339(char *out, size_t outLen, uint64_t nsec)
 {
     time_t secs = (time_t)(nsec / 1000000000ULL);
     uint32_t nanos = (uint32_t)(nsec % 1000000000ULL);
     struct tm tm;
-    char tmp[48];
     int n;
 
     if (!nats_gmtime(&secs, &tm))
         return NATS_ERR;
 
-    n = snprintf(tmp, sizeof(tmp),
-                 "\"%04d-%02d-%02dT%02d:%02d:%02d.%09" PRIu32 "Z\"",
+    n = snprintf(out, outLen, "%04d-%02d-%02dT%02d:%02d:%02d.%09" PRIu32 "Z",
                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                  tm.tm_hour, tm.tm_min, tm.tm_sec, nanos);
-    if (n < 0 || n >= (int)sizeof(tmp))
+    if (n < 0 || n >= (int)outLen)
         return NATS_ERR;
-    return natsBuf_Append(b, tmp, n);
+    return NATS_OK;
 }
 
-static natsStatus
-_appendLit(natsBuffer *b, const char *s)
-{
-    return natsBuf_Append(b, s, (int)strlen(s));
-}
-
+// Serializes the request with utils' natsJSONWriter, so this and every other
+// request encoder in orbit.c escape and format the same way. The options have
+// already passed _validate, so MultiLastFor holds no NULL entry.
 static natsStatus
 _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
 {
-    natsStatus s = NATS_OK;
-    bool comma = false;
+    natsJSONWriter w;
+    natsStatus s;
+    char tmp[48];
     bool haveSeq = (bopts->Sequence > 0);
     bool haveT = (bopts->StartTime > 0);
     bool haveML = (bopts->MultiLastFor != NULL && bopts->MultiLastForLen > 0);
-    bool emitSeq;
-    int i;
 
-    if ((s = natsBuf_AppendByte(out, '{')) != NATS_OK)
-        return s;
+    natsJSONWriter_Init(&w, out);
+    natsJSONWriter_StartObject(&w);
 
     // For non-multi-last requests with neither seq nor start_time, default
     // to seq=1; otherwise the server returns no messages.
-    emitSeq = haveSeq || (!haveT && !haveML);
-    if (emitSeq)
+    if (haveSeq || (!haveT && !haveML))
+        natsJSONWriter_AddUInt(&w, "seq", haveSeq ? bopts->Sequence : 1);
+
+    if (bopts->NextBySubject != NULL && bopts->NextBySubject[0] != '\0')
+        natsJSONWriter_AddStr(&w, "next_by_subj", bopts->NextBySubject);
+
+    if (bopts->Batch > 0)
+        natsJSONWriter_AddInt(&w, "batch", bopts->Batch);
+
+    if (bopts->MaxBytes > 0)
+        natsJSONWriter_AddInt(&w, "max_bytes", bopts->MaxBytes);
+
+    if (haveT)
     {
-        uint64_t seq = haveSeq ? bopts->Sequence : 1;
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"seq\":");
-        if (s == NATS_OK)
-            s = _jsonAppendU64(out, seq);
+        s = _formatTimeRFC3339(tmp, sizeof(tmp), bopts->StartTime);
+        if (s != NATS_OK)
+            return s;
+        natsJSONWriter_AddStr(&w, "start_time", tmp);
     }
 
-    if (s == NATS_OK && bopts->NextBySubject != NULL && bopts->NextBySubject[0] != '\0')
+    if (haveML)
+        natsJSONWriter_AddStrArray(&w, "multi_last",
+                                   (const char *const *)bopts->MultiLastFor,
+                                   bopts->MultiLastForLen);
+
+    if (bopts->UpToSeq > 0)
+        natsJSONWriter_AddUInt(&w, "up_to_seq", bopts->UpToSeq);
+
+    if (bopts->UpToTime > 0)
     {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"next_by_subj\":");
-        if (s == NATS_OK)
-            s = _jsonAppendStringQuoted(out, bopts->NextBySubject);
+        s = _formatTimeRFC3339(tmp, sizeof(tmp), bopts->UpToTime);
+        if (s != NATS_OK)
+            return s;
+        natsJSONWriter_AddStr(&w, "up_to_time", tmp);
     }
 
-    if (s == NATS_OK && bopts->Batch > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"batch\":");
-        if (s == NATS_OK)
-            s = _jsonAppendInt(out, bopts->Batch);
-    }
-
-    if (s == NATS_OK && bopts->MaxBytes > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"max_bytes\":");
-        if (s == NATS_OK)
-            s = _jsonAppendInt(out, bopts->MaxBytes);
-    }
-
-    if (s == NATS_OK && haveT)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"start_time\":");
-        if (s == NATS_OK)
-            s = _jsonAppendTimeRFC3339(out, bopts->StartTime);
-    }
-
-    if (s == NATS_OK && haveML)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"multi_last\":[");
-        for (i = 0; s == NATS_OK && i < bopts->MultiLastForLen; i++)
-        {
-            if (i > 0)
-                s = natsBuf_AppendByte(out, ',');
-            if (s == NATS_OK)
-            {
-                const char *subj = bopts->MultiLastFor[i];
-                if (subj == NULL)
-                    return NATS_INVALID_ARG;
-                s = _jsonAppendStringQuoted(out, subj);
-            }
-        }
-        if (s == NATS_OK)
-            s = natsBuf_AppendByte(out, ']');
-    }
-
-    if (s == NATS_OK && bopts->UpToSeq > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"up_to_seq\":");
-        if (s == NATS_OK)
-            s = _jsonAppendU64(out, bopts->UpToSeq);
-    }
-
-    if (s == NATS_OK && bopts->UpToTime > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"up_to_time\":");
-        if (s == NATS_OK)
-            s = _jsonAppendTimeRFC3339(out, bopts->UpToTime);
-    }
-
-    if (s == NATS_OK)
-        s = natsBuf_AppendByte(out, '}');
-
-    return s;
+    natsJSONWriter_EndObject(&w);
+    return natsJSONWriter_Status(&w);
 }
 
 // Build the request subject "<prefix>DIRECT.GET.<stream>".
@@ -313,10 +177,17 @@ _validate(const char *stream, const jsBatchFetchOptions *bopts)
         return NATS_INVALID_ARG;
     if (bopts->MultiLastFor != NULL)
     {
+        int i;
+
         if (bopts->MultiLastForLen <= 0)
             return NATS_INVALID_ARG;
         if (bopts->MultiLastForLen > JS_BATCH_FETCH_MAX_SUBJECTS)
             return NATS_INVALID_ARG;
+        for (i = 0; i < bopts->MultiLastForLen; i++)
+        {
+            if (bopts->MultiLastFor[i] == NULL)
+                return NATS_INVALID_ARG;
+        }
     }
     else if (bopts->MultiLastForLen != 0)
     {

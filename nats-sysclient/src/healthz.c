@@ -93,52 +93,24 @@ _parseHealthz(void *dst, natsJSON *node)
 }
 
 static void
-_freeHealthz(natsSysHealthz *healthz)
+_freeHealthz(void *dst)
 {
+    natsSysHealthz *healthz = (natsSysHealthz *) dst;
+
     sysclient_freeFields(healthz, _healthzFields, SYS_NFIELDS(_healthzFields));
     sysclient_freeValueArray((void **) &healthz->Errors, &healthz->ErrorsCount,
                              sizeof(natsSysHealthzError), _freeHealthzError);
 }
 
-// Decodes one reply into a fully-owned response.
-static natsStatus
-_respFromMsg(void **newResp, natsMsg *msg)
-{
-    natsSysHealthzResp *resp;
-    natsStatus          s;
-
-    *newResp = NULL;
-
-    resp = (natsSysHealthzResp *) NATS_CALLOC(1, sizeof(natsSysHealthzResp));
-    if (resp == NULL)
-        return NATS_NO_MEMORY;
-
-    s = sysclient_decodeResp(msg, &resp->Server, &resp->Error, &resp->Healthz,
-                             "data", _parseHealthz);
-    if (s != NATS_OK)
-    {
-        natsSysHealthzResp_Destroy(resp);
-        return s;
-    }
-
-    *newResp = resp;
-    return NATS_OK;
-}
-
-static void
-_destroyResp(void *resp)
-{
-    natsSysHealthzResp_Destroy((natsSysHealthzResp *) resp);
-}
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysHealthzResp, Healthz, SYS_SUBJ_HEALTHZ, "data", 64,
+                                                  _marshalOptions, _parseHealthz, _freeHealthz);
 
 natsStatus
 natsSysClient_Healthz(natsSysHealthzResp **newResp, natsSysClient *client,
                       const char *serverID, const natsSysHealthzOptions *opts,
                       int64_t timeout)
 {
-    return sysclient_request((void **) newResp, client, serverID, SYS_SUBJ_HEALTHZ,
-                             _marshalOptions, opts, 64, timeout,
-                             _respFromMsg);
+    return sysclient_request((void **) newResp, client, serverID, opts, timeout, &_endpoint);
 }
 
 natsStatus
@@ -148,21 +120,14 @@ natsSysClient_HealthzPing(natsSysHealthzRespList *list, natsSysClient *client,
     if (list == NULL)
         return NATS_INVALID_ARG;
 
-    return sysclient_ping((void ***) &list->Resps, &list->Count, client, SYS_SUBJ_HEALTHZ,
-                          _marshalOptions, opts, 64, timeout, _respFromMsg,
-                          _destroyResp);
+    return sysclient_ping((void ***) &list->Resps, &list->Count, client, opts, timeout,
+                          &_endpoint);
 }
 
 void
 natsSysHealthzResp_Destroy(natsSysHealthzResp *resp)
 {
-    if (resp == NULL)
-        return;
-
-    sysclient_freeServerInfo(&resp->Server);
-    sysclient_freeAPIError(&resp->Error);
-    _freeHealthz(&resp->Healthz);
-    NATS_FREE(resp);
+    sysclient_destroyResp(resp, &_endpoint);
 }
 
 void
@@ -171,5 +136,6 @@ natsSysHealthzRespList_Destroy(natsSysHealthzRespList *list)
     if (list == NULL)
         return;
 
-    sysclient_freeRespList((void ***) &list->Resps, &list->Count, _destroyResp);
+    sysclient_freeList((void ***) &list->Resps, &list->Count, sysclient_destroyResp,
+                       &_endpoint);
 }

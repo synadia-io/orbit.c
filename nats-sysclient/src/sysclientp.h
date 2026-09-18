@@ -53,32 +53,82 @@ struct __natsSysClient
     int64_t         stallInterval;
 };
 
-// Sends a request to one server and waits for its reply.
 //
-// 'subjFmt' is one of the SYS_SUBJ_* templates. A 'timeout' of 0 selects
-// NATS_SYS_DEFAULT_REQUEST_TIMEOUT. On success *replyMsg is the reply, which
-// the caller destroys.
+// Endpoints.
 //
-// Returns NATS_INVALID_ARG for a NULL or empty serverID, NATS_NOT_FOUND when
-// nobody answered (see the remap comment at the call site), or the underlying
-// transport status.
-natsStatus
-sysclient_requestByID(natsMsg **replyMsg, natsSysClient *client, const char *serverID,
-                      const char *subjFmt, const char *payload, int payloadLen,
-                      int64_t timeout);
+// Every endpoint is the same shape: a request subject, an options marshaller,
+// and a response laid out as {Server; <payload>; Error;} with a parser and a
+// releaser for the payload. One descriptor per endpoint carries that shape,
+// and sysclient.c does the envelope work — allocate, decode, release — for
+// all six, so a change to the envelope contract is made in one place.
+//
 
-// Scatters a request to every server and gathers the replies.
+/** Serializes an endpoint's request options into 'buf'.
+ *
+ * 'opts' is the endpoint's own options type and may be NULL, meaning defaults;
+ * each implementation re-types it on its first line.
+ */
+typedef natsStatus (*sysMarshalFn)(natsBuffer *buf, const void *opts);
+
+typedef struct
+{
+    const char  *Subject;    ///< One of the SYS_SUBJ_* templates.
+    const char  *PayloadKey; ///< "data" for every endpoint but STATSZ ("statsz").
+    int          BufHint;    ///< Initial request buffer size, big enough for the common case.
+    size_t       RespSize;   ///< sizeof the endpoint's response struct.
+    size_t       ServerOff;  ///< offsetof its natsSysServerInfo member.
+    size_t       ErrorOff;   ///< offsetof its natsSysAPIError member.
+    size_t       PayloadOff; ///< offsetof its payload member.
+    sysMarshalFn Marshal;
+    sysParseFn   ParsePayload; ///< Decodes the payload object into the zeroed member.
+    sysFreeFn    FreePayload;  ///< Releases the payload member's contents.
+
+} sysEndpoint;
+
+// Fills a descriptor for a response type laid out as {Server; payload; Error;}.
+#define SYS_ENDPOINT(respType, payloadMember, subj, key, hint, marshal, parse, freep) \
+    {                                                                                \
+        (subj), (key), (hint), sizeof(respType), offsetof(respType, Server),        \
+        offsetof(respType, Error), offsetof(respType, payloadMember), (marshal),    \
+        (parse), (freep)                                                             \
+    }
+
+// Marshals the options, sends the request to one server and decodes the reply
+// into a freshly allocated response; *newResp is NULL on error.
+//
+// Returns NATS_INVALID_ARG for a NULL or empty serverID or a negative timeout,
+// NATS_NOT_FOUND when nobody answered (see the remap comment at the request
+// call in sysclient.c), or the underlying transport status.
+natsStatus
+sysclient_request(void **newResp, natsSysClient *client, const char *serverID,
+                  const void *opts, int64_t timeout, const sysEndpoint *ep);
+
+// As sysclient_request, but scatters to every server and decodes every reply
+// into a freshly allocated array, one entry per server that answered.
 //
 // The gather ends on the first of: the configured server count, the stall
 // interval elapsing with no new reply, or the timeout. Timeout expiry is
 // normal termination, not an error, so a gather that times out having heard
-// nothing returns NATS_OK with an empty list. NATS_NO_RESPONDERS — nobody
-// subscribed to the subject at all — is a genuine error and propagates.
-// Always destroy *list with natsMsgList_Destroy unless the return was
-// NATS_INVALID_ARG.
+// nothing returns NATS_OK with *count == 0. NATS_NO_RESPONDERS — nobody
+// subscribed to the subject at all — is a genuine error and propagates. If any
+// reply fails to decode the whole batch is released and the error returned.
 natsStatus
-sysclient_pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
-                      const char *payload, int payloadLen, int64_t timeout);
+sysclient_ping(void ***resps, int *count, natsSysClient *client, const void *opts,
+               int64_t timeout, const sysEndpoint *ep);
+
+// Releases one response, including the response object itself. 'ep' is the
+// endpoint's descriptor; the argument is untyped so this doubles as a
+// sysDestroyFn. NULL is a no-op.
+void
+sysclient_destroyResp(void *resp, const void *ep);
+
+/** Releases one element of a list, including the element itself. */
+typedef void (*sysDestroyFn)(void *elem, const void *ctx);
+
+// Releases an array of elements and zeroes both out-params. A NULL 'destroy'
+// releases the array alone, for elements that need no cleanup of their own.
+void
+sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *ctx);
 
 // Splits a response envelope into its parts. 'payloadKey' is "data" for every
 // endpoint except STATSZ, which uses "statsz".
@@ -90,93 +140,120 @@ natsStatus
 sysclient_parseEnvelope(natsSysServerInfo *server, natsSysAPIError *apiErr,
                         natsJSON **payload, natsJSON *root, const char *payloadKey);
 
-// Decodes a whole reply into an already-allocated, zeroed response.
-//
-// The caller passes pointers to its own members rather than offsets, so this
-// stays type-safe at the call site while the envelope handling lives in one
-// place. Returns the status already mapped through sysclient_responseStatus().
-natsStatus
-sysclient_decodeResp(natsMsg *msg, natsSysServerInfo *server, natsSysAPIError *apiErr,
-                     void *payloadDst, const char *payloadKey, sysParseFn parsePayload);
-
-/** Builds one fully-owned response from a reply; *newResp is NULL on error. */
-typedef natsStatus (*sysRespFromMsgFn)(void **newResp, natsMsg *msg);
-
-/** Destroys a response, including the response object itself. */
-typedef void (*sysRespDestroyFn)(void *resp);
-
-/** Serializes an endpoint's request options into 'buf'.
- *
- * 'opts' is the endpoint's own options type and may be NULL, meaning defaults;
- * each implementation re-types it on its first line. This mirrors sysParseFn
- * and sysRespFromMsgFn, which erase the type for the same reason.
- */
-typedef natsStatus (*sysMarshalFn)(natsBuffer *buf, const void *opts);
-
-// Marshals the options, sends the request to one server and decodes the reply.
-//
-// 'bufHint' is the initial payload buffer size — big enough that the common
-// request never has to grow it.
-natsStatus
-sysclient_request(void **newResp, natsSysClient *client, const char *serverID,
-                  const char *subjFmt, sysMarshalFn marshal, const void *opts,
-                  int bufHint, int64_t timeout, sysRespFromMsgFn fromMsg);
-
-// As sysclient_request, but scatters to every server; see sysclient_pingList
-// for how the gather terminates.
-natsStatus
-sysclient_ping(void ***resps, int *count, natsSysClient *client, const char *subjFmt,
-               sysMarshalFn marshal, const void *opts, int bufHint, int64_t timeout,
-               sysRespFromMsgFn fromMsg, sysRespDestroyFn destroyResp);
-
-// Releases an array of responses and zeroes both out-params.
-void
-sysclient_freeRespList(void ***resps, int *count, sysRespDestroyFn destroyResp);
-
-// Scatters a request and decodes every reply into a freshly allocated array.
-//
-// Shared by all six *Ping calls: only the response type differs, and that is
-// carried by the two callbacks. If any reply fails to decode the whole batch
-// is released and the error returned.
-natsStatus
-sysclient_pingList(void ***resps, int *count, natsSysClient *client, const char *subjFmt,
-                   const char *payload, int payloadLen, int64_t timeout,
-                   sysRespFromMsgFn fromMsg, sysRespDestroyFn destroyResp);
-
-/** Fills one freshly-calloc'd walk from a page the ping produced.
- *
- * 'opts' is the endpoint's own options type and may be NULL, meaning defaults;
- * each implementation re-types it, as sysMarshalFn does. On NATS_OK the walk
- * has adopted 'page' and the caller must not release it; on any other status
- * ownership stays with the caller.
- */
-typedef natsStatus (*sysWalkInitFn)(void *walk, natsSysClient *client, const void *opts,
-                                    void *page);
-
-/** How to build and release one endpoint's walks. */
-typedef struct
-{
-    size_t           WalkSize;    ///< sizeof the endpoint's walk struct.
-    sysWalkInitFn    InitWalk;    ///< Fills one walk from one page.
-    sysRespDestroyFn DestroyWalk; ///< Releases a walk, including the walk itself.
-    sysRespDestroyFn DestroyPage; ///< Releases a page the ping produced.
-
-} sysWalkOps;
-
-// Turns a list of ping replies into a list of walks, one per responding server.
-//
-// Consumes 'pages' whatever the outcome, releasing every page a walk did not
-// adopt and zeroing both of its out-params. On failure no walk survives and
-// *walks is NULL. An empty 'pages' is not an error: it yields an empty list.
-natsStatus
-sysclient_buildWalks(void ***walks, int *walkCount, natsSysClient *client, void ***pages,
-                     int *pageCount, const void *opts, const sysWalkOps *ops);
-
 void
 sysclient_freeServerInfo(natsSysServerInfo *server);
 
 void
 sysclient_freeAPIError(natsSysAPIError *apiErr);
+
+//
+// Page walks.
+//
+// CONNZ, SUBSZ and JSZ page their results. The loop that drives a walk — the
+// deadline, the offset arithmetic, and the empty-page guard that deliberately
+// deviates from orbit.go (whose per-server iterators can spin forever on a
+// shrinking result set) — lives once, in sysclient.c. An endpoint describes
+// its pages as data where an offset will do, and supplies a typed function
+// only where real code differs: fetching a page and copying its options.
+//
+
+/** Delivers one page to the caller; returns false to stop the walk. */
+typedef bool (*sysPageHandler)(void *page, void *closure);
+
+// offsetof() an int member, rejected at compile time for any other width, so a
+// walk table cannot silently read four bytes of an int64_t.
+#define SYS_INT_OFF(st, fld) \
+    (offsetof(st, fld) + 0 * sizeof(char[(sizeof(((st *) 0)->fld) == sizeof(int)) ? 1 : -1]))
+
+typedef struct
+{
+    const sysEndpoint *Endpoint;
+    size_t             OptsSize;  ///< sizeof the endpoint's options struct.
+    size_t             OffsetOff; ///< SYS_INT_OFF of the options' Offset member.
+    size_t             CountOff;  ///< SYS_INT_OFF of a page's element count.
+    size_t             TotalOff;  ///< SYS_INT_OFF of the total a page reports.
+
+    /** Deep-copies 'src' (NULL meaning defaults) into the zeroed 'dst'. On
+     * failure 'dst' holds only owned or NULL strings, so FreeOptions is safe. */
+    natsStatus (*CopyOptions)(void *dst, const void *src);
+
+    /** Releases the members of an options copy, not the struct itself. */
+    void (*FreeOptions)(void *opts);
+
+    /** Requests one page: a shallow copy of 'opts' (NULL meaning defaults)
+     * with its offset replaced. */
+    natsStatus (*Fetch)(void **page, natsSysClient *client, const char *serverID,
+                        const void *opts, int offset, int64_t timeout);
+
+    /** Whether the options ask for a paged result at all; NULL means always.
+     * JSZ pages only over account details, so without Accounts there is
+     * exactly one page whatever it reports. 'opts' may be NULL. */
+    bool (*IsPaged)(const void *opts);
+
+} sysWalkOps;
+
+// Defines the trampoline that re-types an endpoint's page handler for the
+// driver: a `_sink` holding the caller's handler and closure, and `_deliver`,
+// the sysPageHandler that unpacks it. One per endpoint file.
+#define SYS_WALK_SINK(handlerType, respType)     \
+    typedef struct                               \
+    {                                            \
+        handlerType handler;                     \
+        void       *closure;                     \
+                                                 \
+    } _sink;                                     \
+                                                 \
+    static bool                                  \
+    _deliver(void *page, void *closure)          \
+    {                                            \
+        _sink *sink = (_sink *) closure;         \
+                                                 \
+        return sink->handler((respType *) page, sink->closure); \
+    }
+
+// One walk over one server's pages. The public natsSys*Walk types are never
+// completed: a walk *is* one of these, and the endpoint's pointer type is only
+// a tag telling the caller which _Run to hand it to.
+typedef struct
+{
+    const sysWalkOps *ops;
+    natsSysClient    *client;   // borrowed; must outlive the walk
+    char             *serverID; // owned
+    void             *opts;     // owned deep copy, so the caller may drop its strings
+    void             *first;    // owned until delivered by the first _Run
+    int               total;    // taken from the first page, never refreshed
+    int               offset;   // offset of the next page to request
+    bool              done;
+
+} sysWalk;
+
+// Walks every page on one server, delivering each to 'handler'. The options
+// are borrowed for the duration of the call. One timeout budget covers the
+// whole walk.
+natsStatus
+sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts,
+                   int64_t timeout, sysPageHandler handler, void *closure,
+                   const sysWalkOps *ops);
+
+// Scatters the first page to every server and turns each reply into a walk.
+// On failure no walk survives and *walks is NULL. An empty gather is not an
+// error: it yields an empty list. A reply that did not name its sender is
+// rejected with NATS_ERR, since every later page is fetched by ID.
+natsStatus
+sysclient_pingEach(void ***walks, int *count, natsSysClient *client, const void *opts,
+                   int64_t timeout, const sysWalkOps *ops);
+
+// Continues a walk: delivers the page the ping fetched, then every remaining
+// page by ID. Returns NATS_OK at once for a finished walk.
+natsStatus
+sysclient_walkRun(sysWalk *walk, int64_t timeout, sysPageHandler handler, void *closure);
+
+const char *
+sysclient_walkID(const sysWalk *walk);
+
+// A sysDestroyFn for walks; 'ctx' is unused.
+void
+sysclient_walkDestroy(void *walk, const void *ctx);
 
 //
 // Parsers for the shared types declared in sysclient.h. The rule is simply
@@ -229,18 +306,12 @@ sysclient_freeSubDetail(void *dst);
 natsStatus
 sysclient_dupStr(char **dst, const char *src);
 
-// Copies the server ID a walk must be pinned to, rejecting a reply that did not
-// name its sender. Only the walk builders need this: a VARZ or HEALTHZ reply
-// without an ID is still perfectly usable, so the check does not belong in the
-// shared ping plumbing.
-natsStatus
-sysclient_walkServerID(char **dst, const char *id);
-
 // The same, for members the public option structs declare const. To a caller
 // those strings are inputs, which is why they are const there; a walk's copy
 // owns its strings, and these two are the only places that ownership is
-// expressed. (The string-array equivalents stay local to sysclient.c: only the
-// event filter has an array member, and only sysclient.c copies it.)
+// expressed. On failure *dst is NULL. (The string-array equivalent stays local
+// to sysclient.c: only the event filter has an array member, and only
+// sysclient.c copies it.)
 
 natsStatus
 sysclient_dupOptStr(const char **dst, const char *src);
@@ -254,28 +325,6 @@ sysclient_copyEventFilter(natsSysEventFilterOptions *dst,
 
 void
 sysclient_freeEventFilter(natsSysEventFilterOptions *filter);
-
-// Milliseconds from a monotonic clock, for whole-walk deadlines. Matches how
-// nats-extra/src/requestmany.c measures its own budget.
-int64_t
-sysclient_nowMs(void);
-
-// The longest timeout honoured, in milliseconds. Seven days is far beyond any
-// real monitoring request, and bounding it keeps every millisecond value this
-// library hands downwards small enough to survive being turned into a deadline:
-// both cnats and nats-extra compute `now + timeout` into an int64, which
-// overflows for values near INT64_MAX.
-#define SYSCLIENT_MAX_TIMEOUT_MS ((int64_t) 7 * 24 * 60 * 60 * 1000)
-
-// Applied at every point a caller's timeout crosses into cnats or nats-extra —
-// the two request funnels and the walk deadline below — so INT64_MAX means
-// "no practical limit" everywhere rather than only inside a page loop.
-int64_t
-sysclient_capTimeout(int64_t timeout);
-
-// A whole-walk deadline 'timeout' milliseconds from now, capped as above.
-int64_t
-sysclient_deadline(int64_t timeout);
 
 // The body of every natsSys*Options_Init: reject a NULL out-param, otherwise
 // zero the struct. Each public function stays a real symbol rather than a macro

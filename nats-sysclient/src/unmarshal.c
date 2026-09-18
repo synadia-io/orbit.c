@@ -13,7 +13,6 @@
 
 #include "unmarshal.h"
 
-#include "buf.h"
 #include "os_shims.h"
 
 #include <stdint.h>
@@ -48,32 +47,26 @@ _lookupTyped(natsJSON **node, natsJSON *obj, const char *key, natsJSONType want)
     return NATS_OK;
 }
 
-// Re-serializes one node into a freshly allocated NUL-terminated string.
-//
-// 'scratch' is caller-owned and reset on entry, so a loop over many nodes can
-// hold one buffer at its high-water mark instead of growing a new one from
-// scratch for every element.
+// Copies the input text one node was parsed from into a freshly allocated
+// NUL-terminated string. The span borrows from the message the tree was parsed
+// from, which sysclient.c keeps alive until the tree is gone, so no
+// re-serialization is needed: one malloc and one memcpy per subtree.
 static natsStatus
-_nodeToStr(char **out, natsJSON *node, natsBuffer *scratch)
+_nodeToStr(char **out, natsJSON *node)
 {
-    natsStatus s;
-    int        len;
+    const char *text = NULL;
+    int         len  = 0;
+    natsStatus  s;
 
-    natsBuf_Reset(scratch);
-
-    s = natsJSON_Write(node, scratch);
+    s = natsJSON_Raw(node, &text, &len);
     if (s != NATS_OK)
         return s;
 
-    // The length is already known, so copy it directly rather than appending a
-    // terminator (which can realloc the whole subtree) and then strlen'ing it
-    // back out.
-    len  = natsBuf_Len(scratch);
     *out = (char *) NATS_MALLOC((size_t) len + 1);
     if (*out == NULL)
         return NATS_NO_MEMORY;
 
-    memcpy(*out, natsBuf_Data(scratch), (size_t) len);
+    memcpy(*out, text, (size_t) len);
     (*out)[len] = '\0';
     return NATS_OK;
 }
@@ -82,7 +75,6 @@ natsStatus
 sysclient_rawJSONField(char **out, natsJSON *obj, const char *key)
 {
     natsJSON  *field = NULL;
-    natsBuffer buf   = NATS_EMPTY_BUFFER;
     natsStatus s;
 
     if ((out == NULL) || (key == NULL))
@@ -99,13 +91,7 @@ sysclient_rawJSONField(char **out, natsJSON *obj, const char *key)
     if (natsJSON_Type(field) == NATS_JSON_NULL)
         return NATS_OK;
 
-    s = natsBuf_Init(&buf, 256);
-    if (s != NATS_OK)
-        return s;
-
-    s = _nodeToStr(out, field, &buf);
-    natsBuf_Destroy(&buf);
-    return s;
+    return _nodeToStr(out, field);
 }
 
 natsStatus
@@ -340,7 +326,6 @@ sysclient_rawJSONArray(char ***out, int *count, natsJSON *obj, const char *key)
 {
     natsStatus s = NATS_OK;
     natsJSON  *arrNode = NULL;
-    natsBuffer scratch = NATS_EMPTY_BUFFER;
     char     **arr;
     int        n;
     int        i;
@@ -363,36 +348,20 @@ sysclient_rawJSONArray(char ***out, int *count, natsJSON *obj, const char *key)
     if (arr == NULL)
         return NATS_NO_MEMORY;
 
-    // One scratch buffer for the whole array: after the first element it is
-    // already at the high-water mark, so the rest serialize without growing it.
-    s = natsBuf_Init(&scratch, 256);
-    if (s != NATS_OK)
-    {
-        NATS_FREE(arr);
-        return s;
-    }
-
     for (i = 0; i < n; i++)
     {
         natsJSON *elem = NULL;
 
         s = natsJSON_ArrayGet(arrNode, i, &elem);
         if (s == NATS_OK)
-            s = _nodeToStr(&arr[i], elem, &scratch);
+            s = _nodeToStr(&arr[i], elem);
 
         if (s != NATS_OK)
         {
-            int j;
-
-            for (j = 0; j < n; j++)
-                NATS_FREE(arr[j]);
-            NATS_FREE(arr);
-            natsBuf_Destroy(&scratch);
+            sysclient_freeStrArray(&arr, &n);
             return s;
         }
     }
-
-    natsBuf_Destroy(&scratch);
 
     *out   = arr;
     *count = n;
@@ -457,11 +426,14 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n)
 
         switch (f->Kind)
         {
+            // Moved rather than copied: the tree is private to the reply
+            // decoder in sysclient.c and destroyed as soon as the payload is
+            // decoded, so nothing else will ever read these strings from it.
             case SYS_FLD_STR:
-                s = natsJSON_GetStr(obj, f->Key, (char **) p);
+                s = natsJSON_TakeStr(obj, f->Key, (char **) p);
                 break;
             case SYS_FLD_STRARRAY:
-                s = natsJSON_GetStrArray(obj, f->Key, (char ***) p, COUNT_PTR(dst, f));
+                s = natsJSON_TakeStrArray(obj, f->Key, (char ***) p, COUNT_PTR(dst, f));
                 break;
             case SYS_FLD_RAWJSON:
                 s = sysclient_rawJSONField((char **) p, obj, f->Key);

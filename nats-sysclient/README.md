@@ -124,7 +124,7 @@ For a single server, pass the ID from a previous response's
 only to the `*Ping` calls.
 
 - `StallInterval` — once the first reply has arrived, stop if no further reply
-  turns up within this many milliseconds. Defaults to 300.
+  turns up within this many milliseconds. Defaults to 300; must be positive.
 - `ServerCount` — stop after this many replies. Set it to the number of servers
   in the cluster as seen by the connected server. Defaults to -1 (no limit).
 

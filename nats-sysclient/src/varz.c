@@ -444,8 +444,10 @@ _parseVarz(void *dst, natsJSON *node)
 }
 
 static void
-_freeVarz(natsSysVarz *varz)
+_freeVarz(void *dst)
 {
+    natsSysVarz *varz = (natsSysVarz *) dst;
+
     sysclient_freeFields(varz, _varzFields, SYS_NFIELDS(_varzFields));
 
     _freeClusterOpts(&varz->Cluster);
@@ -463,43 +465,15 @@ _freeVarz(natsSysVarz *varz)
                            &varz->TrustedOperatorsClaimJSONCount);
 }
 
-static natsStatus
-_respFromMsg(void **newResp, natsMsg *msg)
-{
-    natsSysVarzResp *resp;
-    natsStatus       s;
-
-    *newResp = NULL;
-
-    resp = (natsSysVarzResp *) NATS_CALLOC(1, sizeof(natsSysVarzResp));
-    if (resp == NULL)
-        return NATS_NO_MEMORY;
-
-    s = sysclient_decodeResp(msg, &resp->Server, &resp->Error, &resp->Varz, "data",
-                             _parseVarz);
-    if (s != NATS_OK)
-    {
-        natsSysVarzResp_Destroy(resp);
-        return s;
-    }
-
-    *newResp = resp;
-    return NATS_OK;
-}
-
-static void
-_destroyResp(void *resp)
-{
-    natsSysVarzResp_Destroy((natsSysVarzResp *) resp);
-}
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysVarzResp, Varz, SYS_SUBJ_VARZ, "data", 64,
+                                                  _marshalOptions, _parseVarz, _freeVarz);
 
 natsStatus
 natsSysClient_Varz(natsSysVarzResp **newResp, natsSysClient *client,
-                   const char *serverID, const natsSysVarzOptions *opts, int64_t timeout)
+                   const char *serverID, const natsSysVarzOptions *opts,
+                   int64_t timeout)
 {
-    return sysclient_request((void **) newResp, client, serverID, SYS_SUBJ_VARZ,
-                             _marshalOptions, opts, 64, timeout,
-                             _respFromMsg);
+    return sysclient_request((void **) newResp, client, serverID, opts, timeout, &_endpoint);
 }
 
 natsStatus
@@ -509,21 +483,14 @@ natsSysClient_VarzPing(natsSysVarzRespList *list, natsSysClient *client,
     if (list == NULL)
         return NATS_INVALID_ARG;
 
-    return sysclient_ping((void ***) &list->Resps, &list->Count, client, SYS_SUBJ_VARZ,
-                          _marshalOptions, opts, 64, timeout, _respFromMsg,
-                          _destroyResp);
+    return sysclient_ping((void ***) &list->Resps, &list->Count, client, opts, timeout,
+                          &_endpoint);
 }
 
 void
 natsSysVarzResp_Destroy(natsSysVarzResp *resp)
 {
-    if (resp == NULL)
-        return;
-
-    sysclient_freeServerInfo(&resp->Server);
-    sysclient_freeAPIError(&resp->Error);
-    _freeVarz(&resp->Varz);
-    NATS_FREE(resp);
+    sysclient_destroyResp(resp, &_endpoint);
 }
 
 void
@@ -532,5 +499,6 @@ natsSysVarzRespList_Destroy(natsSysVarzRespList *list)
     if (list == NULL)
         return;
 
-    sysclient_freeRespList((void ***) &list->Resps, &list->Count, _destroyResp);
+    sysclient_freeList((void ***) &list->Resps, &list->Count, sysclient_destroyResp,
+                       &_endpoint);
 }

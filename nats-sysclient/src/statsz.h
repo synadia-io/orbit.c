@@ -45,7 +45,7 @@ typedef struct __natsSysRouteStat
     char            *Name;     ///< Remote server name.
     natsSysDataStats Sent;     ///< Traffic sent on this route.
     natsSysDataStats Received; ///< Traffic received on this route.
-    int              Pending;  ///< Bytes waiting to be written.
+    int64_t          Pending;  ///< Bytes waiting to be written.
 
 } natsSysRouteStat;
 

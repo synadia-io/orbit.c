@@ -22,17 +22,6 @@
 
 #include <string.h>
 
-struct __natsSysConnzWalk
-{
-    natsSysClient      *client;   // borrowed; must outlive the walk
-    char               *serverID; // owned
-    natsSysConnzOptions opts;     // deep copy, so the caller may drop its strings
-    natsSysConnzResp   *first;    // owned until delivered by the first _Run
-    int                 total;    // taken from the first page, never refreshed
-    int                 offset;   // offset of the next page to request
-    bool                done;
-};
-
 static const sysField _tlsPeerCertFields[] = {
     SYS_F(SYS_FLD_STR, natsSysTLSPeerCert, Subject, "subject"),
     SYS_F(SYS_FLD_STR, natsSysTLSPeerCert, SubjectPKISha256, "spki_sha256"),
@@ -52,7 +41,7 @@ static const sysField _connInfoFields[] = {
     SYS_F(SYS_FLD_STR, natsSysConnInfo, RTT, "rtt"),
     SYS_F(SYS_FLD_STR, natsSysConnInfo, Uptime, "uptime"),
     SYS_F(SYS_FLD_STR, natsSysConnInfo, Idle, "idle"),
-    SYS_F(SYS_FLD_INT, natsSysConnInfo, Pending, "pending_bytes"),
+    SYS_F(SYS_FLD_I64, natsSysConnInfo, Pending, "pending_bytes"),
     SYS_F(SYS_FLD_I64, natsSysConnInfo, InMsgs, "in_msgs"),
     SYS_F(SYS_FLD_I64, natsSysConnInfo, OutMsgs, "out_msgs"),
     SYS_F(SYS_FLD_I64, natsSysConnInfo, InBytes, "in_bytes"),
@@ -133,18 +122,20 @@ _copyOptions(natsSysConnzOptions *dst, const natsSysConnzOptions *src)
 {
     natsStatus s = NATS_OK;
 
-    natsSysConnzOptions_Init(dst);
     if (src == NULL)
-        return NATS_OK;
+        return natsSysConnzOptions_Init(dst);
 
-    // Scalars first, then the strings that need their own storage.
-    dst->Username            = src->Username;
-    dst->Subscriptions       = src->Subscriptions;
-    dst->SubscriptionsDetail = src->SubscriptionsDetail;
-    dst->Offset              = src->Offset;
-    dst->Limit               = src->Limit;
-    dst->CID                 = src->CID;
-    dst->State               = src->State;
+    // The struct copy carries every scalar, so a new one cannot be forgotten
+    // here. The members that need their own storage are then cleared before
+    // being copied, so a failure part-way leaves _freeOptionsCopy nothing but
+    // owned strings or NULL.
+    *dst = *src;
+    dst->Sort          = NULL;
+    dst->MQTTClient    = NULL;
+    dst->User          = NULL;
+    dst->Account       = NULL;
+    dst->FilterSubject = NULL;
+    memset(&dst->Filter, 0, sizeof(dst->Filter));
 
     IFOK(s, sysclient_dupOptStr(&dst->Sort, src->Sort));
     IFOK(s, sysclient_dupOptStr(&dst->MQTTClient, src->MQTTClient));
@@ -227,50 +218,23 @@ _parseConnz(void *dst, natsJSON *node)
 }
 
 static void
-_freeConnz(natsSysConnz *connz)
+_freeConnz(void *dst)
 {
+    natsSysConnz *connz = (natsSysConnz *) dst;
+
     sysclient_freeFields(connz, _connzFields, SYS_NFIELDS(_connzFields));
     sysclient_freePtrArray((void ***) &connz->Conns, &connz->ConnsCount, _freeConnInfo);
 }
 
-static natsStatus
-_respFromMsg(void **newResp, natsMsg *msg)
-{
-    natsSysConnzResp *resp;
-    natsStatus        s;
-
-    *newResp = NULL;
-
-    resp = (natsSysConnzResp *) NATS_CALLOC(1, sizeof(natsSysConnzResp));
-    if (resp == NULL)
-        return NATS_NO_MEMORY;
-
-    s = sysclient_decodeResp(msg, &resp->Server, &resp->Error, &resp->Connz, "data",
-                             _parseConnz);
-    if (s != NATS_OK)
-    {
-        natsSysConnzResp_Destroy(resp);
-        return s;
-    }
-
-    *newResp = resp;
-    return NATS_OK;
-}
-
-static void
-_destroyResp(void *resp)
-{
-    natsSysConnzResp_Destroy((natsSysConnzResp *) resp);
-}
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysConnzResp, Connz, SYS_SUBJ_CONNZ, "data", 256,
+                                                  _marshalOptions, _parseConnz, _freeConnz);
 
 natsStatus
 natsSysClient_Connz(natsSysConnzResp **newResp, natsSysClient *client,
                     const char *serverID, const natsSysConnzOptions *opts,
                     int64_t timeout)
 {
-    return sysclient_request((void **) newResp, client, serverID, SYS_SUBJ_CONNZ,
-                             _marshalOptions, opts, 256, timeout,
-                             _respFromMsg);
+    return sysclient_request((void **) newResp, client, serverID, opts, timeout, &_endpoint);
 }
 
 natsStatus
@@ -280,248 +244,14 @@ natsSysClient_ConnzPing(natsSysConnzRespList *list, natsSysClient *client,
     if (list == NULL)
         return NATS_INVALID_ARG;
 
-    return sysclient_ping((void ***) &list->Resps, &list->Count, client, SYS_SUBJ_CONNZ,
-                          _marshalOptions, opts, 256, timeout, _respFromMsg,
-                          _destroyResp);
-}
-
-natsStatus
-natsSysClient_ConnzEach(natsSysClient *client, const char *serverID,
-                        const natsSysConnzOptions *opts, int64_t timeout,
-                        natsSysConnzPageHandler handler, void *closure)
-{
-    natsSysConnzOptions page;
-    natsSysConnzOptions defaults;
-    int64_t             deadline;
-    int                 offset;
-
-    if ((client == NULL) || (handler == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-
-    if (opts == NULL)
-    {
-        natsSysConnzOptions_Init(&defaults);
-        opts = &defaults;
-    }
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-
-    // One budget covers the whole walk, not each page.
-    deadline = sysclient_deadline(timeout);
-    offset   = opts->Offset;
-
-    for (;;)
-    {
-        natsSysConnzResp *resp = NULL;
-        natsStatus        s;
-        int64_t           left;
-        int               received;
-        int               n;
-        int               total;
-        bool              wantMore;
-
-        left = deadline - sysclient_nowMs();
-        if (left <= 0)
-            return NATS_TIMEOUT;
-
-        // The options are borrowed, so the offset is advanced on a copy. Only
-        // scalars differ between pages, so a shallow copy is safe here: it
-        // lives no longer than this call.
-        page        = *opts;
-        page.Offset = offset;
-
-        s = natsSysClient_Connz(&resp, client, serverID, &page, left);
-        if (s != NATS_OK)
-            return s;
-
-        n        = resp->Connz.ConnsCount;
-        total    = resp->Connz.Total;
-        wantMore = handler(resp, closure);
-        natsSysConnzResp_Destroy(resp);
-
-        if (!wantMore)
-            return NATS_OK;
-
-        // Stop once the reported total is covered, and also on an empty page
-        // so a shrinking result set cannot loop forever.
-        received = offset + n;
-        if ((received >= total) || (n == 0))
-            return NATS_OK;
-
-        offset = received;
-    }
-}
-
-static void
-_walkDestroy(void *w)
-{
-    natsSysConnzWalk *walk = (natsSysConnzWalk *) w;
-
-    if (walk == NULL)
-        return;
-
-    natsSysConnzResp_Destroy(walk->first);
-    _freeOptionsCopy(&walk->opts);
-    NATS_FREE(walk->serverID);
-    NATS_FREE(walk);
-}
-
-static natsStatus
-_initWalk(void *walkv, natsSysClient *client, const void *optsv, void *pagev)
-{
-    natsSysConnzWalk *walk = (natsSysConnzWalk *) walkv;
-    natsSysConnzResp *page = (natsSysConnzResp *) pagev;
-    natsStatus        s;
-
-    walk->client = client;
-
-    s = sysclient_walkServerID(&walk->serverID, page->Server.ID);
-    IFOK(s, _copyOptions(&walk->opts, (const natsSysConnzOptions *) optsv));
-    if (s != NATS_OK)
-        return s;
-
-    walk->first  = page;
-    walk->total  = page->Connz.Total;
-    walk->offset = walk->opts.Offset;
-    return NATS_OK;
-}
-
-static const sysWalkOps _walkOps = {
-    sizeof(natsSysConnzWalk),
-    _initWalk,
-    _walkDestroy,
-    _destroyResp,
-};
-
-natsStatus
-natsSysClient_ConnzPingEach(natsSysConnzWalkList *list, natsSysClient *client,
-                            const natsSysConnzOptions *opts, int64_t timeout)
-{
-    natsSysConnzRespList pages = {NULL, 0};
-    natsStatus           s;
-
-    if ((list == NULL) || (client == NULL))
-        return NATS_INVALID_ARG;
-
-    list->Walks = NULL;
-    list->Count = 0;
-
-    s = natsSysClient_ConnzPing(&pages, client, opts, timeout);
-    if (s != NATS_OK)
-    {
-        natsSysConnzRespList_Destroy(&pages);
-        return s;
-    }
-
-    return sysclient_buildWalks((void ***) &list->Walks, &list->Count, client,
-                                (void ***) &pages.Resps, &pages.Count, opts, &_walkOps);
-}
-
-const char *
-natsSysConnzWalk_ServerID(const natsSysConnzWalk *walk)
-{
-    return (walk != NULL) ? walk->serverID : NULL;
-}
-
-natsStatus
-natsSysConnzWalk_Run(natsSysConnzWalk *walk, int64_t timeout,
-                     natsSysConnzPageHandler handler, void *closure)
-{
-    int64_t deadline;
-
-    if ((walk == NULL) || (handler == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-    if (walk->done)
-        return NATS_OK;
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-
-    deadline = sysclient_deadline(timeout);
-
-    // Deliver the page the ping already fetched before asking for more.
-    if (walk->first != NULL)
-    {
-        natsSysConnzResp *resp = walk->first;
-        int               n    = resp->Connz.ConnsCount;
-        bool              wantMore;
-
-        walk->first = NULL;
-        wantMore    = handler(resp, closure);
-        natsSysConnzResp_Destroy(resp);
-
-        walk->offset += n;
-
-        if (!wantMore || (n == 0))
-        {
-            walk->done = true;
-            return NATS_OK;
-        }
-    }
-
-    while (walk->offset < walk->total)
-    {
-        natsSysConnzOptions page;
-        natsSysConnzResp   *resp = NULL;
-        natsStatus          s;
-        int64_t             left;
-        int                 n;
-        bool                wantMore;
-
-        left = deadline - sysclient_nowMs();
-        if (left <= 0)
-            return NATS_TIMEOUT;
-
-        page        = walk->opts;
-        page.Offset = walk->offset;
-
-        // By ID, not by ping. A server that left the cluster meanwhile
-        // yields NATS_NOT_FOUND.
-        s = natsSysClient_Connz(&resp, walk->client, walk->serverID, &page, left);
-        if (s != NATS_OK)
-            return s;
-
-        n        = resp->Connz.ConnsCount;
-        wantMore = handler(resp, closure);
-        natsSysConnzResp_Destroy(resp);
-
-        if (!wantMore || (n == 0))
-        {
-            walk->done = true;
-            return NATS_OK;
-        }
-
-        walk->offset += n;
-    }
-
-    walk->done = true;
-    return NATS_OK;
-}
-
-void
-natsSysConnzWalkList_Destroy(natsSysConnzWalkList *list)
-{
-    if (list == NULL)
-        return;
-
-    sysclient_freeRespList((void ***) &list->Walks, &list->Count, _walkDestroy);
+    return sysclient_ping((void ***) &list->Resps, &list->Count, client, opts, timeout,
+                          &_endpoint);
 }
 
 void
 natsSysConnzResp_Destroy(natsSysConnzResp *resp)
 {
-    if (resp == NULL)
-        return;
-
-    sysclient_freeServerInfo(&resp->Server);
-    sysclient_freeAPIError(&resp->Error);
-    _freeConnz(&resp->Connz);
-    NATS_FREE(resp);
+    sysclient_destroyResp(resp, &_endpoint);
 }
 
 void
@@ -530,5 +260,104 @@ natsSysConnzRespList_Destroy(natsSysConnzRespList *list)
     if (list == NULL)
         return;
 
-    sysclient_freeRespList((void ***) &list->Resps, &list->Count, _destroyResp);
+    sysclient_freeList((void ***) &list->Resps, &list->Count, sysclient_destroyResp,
+                       &_endpoint);
+}
+
+//
+// Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
+//
+
+static natsStatus
+_copyOptionsV(void *dst, const void *src)
+{
+    return _copyOptions((natsSysConnzOptions *) dst, (const natsSysConnzOptions *) src);
+}
+
+static void
+_freeOptionsV(void *opts)
+{
+    _freeOptionsCopy((natsSysConnzOptions *) opts);
+}
+
+// The options are borrowed, so the offset is advanced on a shallow copy. Only
+// scalars differ between pages, and the copy lives no longer than this call.
+static natsStatus
+_fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
+       int offset, int64_t timeout)
+{
+    natsSysConnzOptions pageOpts;
+
+    if (optsv != NULL)
+        pageOpts = *(const natsSysConnzOptions *) optsv;
+    else
+        natsSysConnzOptions_Init(&pageOpts);
+    pageOpts.Offset = offset;
+
+    return natsSysClient_Connz((natsSysConnzResp **) page, client, serverID, &pageOpts, timeout);
+}
+
+static const sysWalkOps _walkOps = {
+    &_endpoint,
+    sizeof(natsSysConnzOptions),
+    SYS_INT_OFF(natsSysConnzOptions, Offset),
+    SYS_INT_OFF(natsSysConnzResp, Connz.ConnsCount),
+    SYS_INT_OFF(natsSysConnzResp, Connz.Total),
+    _copyOptionsV,
+    _freeOptionsV,
+    _fetch,
+    NULL,
+};
+
+SYS_WALK_SINK(natsSysConnzPageHandler, natsSysConnzResp)
+
+natsStatus
+natsSysClient_ConnzEach(natsSysClient *client, const char *serverID,
+                        const natsSysConnzOptions *opts, int64_t timeout,
+                        natsSysConnzPageHandler handler, void *closure)
+{
+    _sink sink = {handler, closure};
+
+    if (handler == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_walkEach(client, serverID, opts, timeout, _deliver, &sink, &_walkOps);
+}
+
+natsStatus
+natsSysClient_ConnzPingEach(natsSysConnzWalkList *list, natsSysClient *client,
+                            const natsSysConnzOptions *opts, int64_t timeout)
+{
+    if (list == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_pingEach((void ***) &list->Walks, &list->Count, client, opts, timeout,
+                              &_walkOps);
+}
+
+const char *
+natsSysConnzWalk_ServerID(const natsSysConnzWalk *walk)
+{
+    return sysclient_walkID((const sysWalk *) walk);
+}
+
+natsStatus
+natsSysConnzWalk_Run(natsSysConnzWalk *walk, int64_t timeout,
+                     natsSysConnzPageHandler handler, void *closure)
+{
+    _sink sink = {handler, closure};
+
+    if (handler == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_walkRun((sysWalk *) walk, timeout, _deliver, &sink);
+}
+
+void
+natsSysConnzWalkList_Destroy(natsSysConnzWalkList *list)
+{
+    if (list == NULL)
+        return;
+
+    sysclient_freeList((void ***) &list->Walks, &list->Count, sysclient_walkDestroy, NULL);
 }

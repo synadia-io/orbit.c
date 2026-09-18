@@ -12,9 +12,10 @@
 // limitations under the License.
 
 // JSZ paginates over accounts rather than a flat list, and only when
-// opts->Accounts is set, so its walk differs from the CONNZ and SUBSZ ones in
-// two places: the total comes from the flattened JetStreamStats.Accounts, and
-// a request without Accounts yields exactly one page.
+// opts->Accounts is set, so its walk adapters differ from the CONNZ and SUBSZ
+// ones in two places: the total comes from the flattened
+// JetStreamStats.Accounts, and a request without Accounts yields exactly one
+// page (_isPaged).
 
 #include "jsz.h"
 
@@ -26,17 +27,6 @@
 #include "os_shims.h"
 
 #include <string.h>
-
-struct __natsSysJszWalk
-{
-    natsSysClient    *client;   // borrowed; must outlive the walk
-    char             *serverID; // owned
-    natsSysJszOptions opts;     // deep copy
-    natsSysJszResp   *first;    // owned until delivered by the first _Run
-    int               total;    // accounts reported by the first page
-    int               offset;   // offset of the next page to request
-    bool              done;
-};
 
 static const sysField _raftGroupDetailFields[] = {
     SYS_F(SYS_FLD_STR, natsSysRaftGroupDetail, Name, "name"),
@@ -110,19 +100,16 @@ _copyOptions(natsSysJszOptions *dst, const natsSysJszOptions *src)
 {
     natsStatus s = NATS_OK;
 
-    natsSysJszOptions_Init(dst);
     if (src == NULL)
-        return NATS_OK;
+        return natsSysJszOptions_Init(dst);
 
-    dst->Accounts         = src->Accounts;
-    dst->Streams          = src->Streams;
-    dst->Consumer         = src->Consumer;
-    dst->Config           = src->Config;
-    dst->LeaderOnly       = src->LeaderOnly;
-    dst->Offset           = src->Offset;
-    dst->Limit            = src->Limit;
-    dst->RaftGroups       = src->RaftGroups;
-    dst->StreamLeaderOnly = src->StreamLeaderOnly;
+    // The struct copy carries every scalar, so a new one cannot be forgotten
+    // here. The members that need their own storage are then cleared before
+    // being copied, so a failure part-way leaves _freeOptionsCopy nothing but
+    // owned strings or NULL.
+    *dst = *src;
+    dst->Account = NULL;
+    memset(&dst->Filter, 0, sizeof(dst->Filter));
 
     IFOK(s, sysclient_dupOptStr(&dst->Account, src->Account));
     IFOK(s, sysclient_copyEventFilter(&dst->Filter, &src->Filter));
@@ -236,8 +223,10 @@ _parseJSInfo(void *dst, natsJSON *node)
 }
 
 static void
-_freeJSInfo(natsSysJSInfo *info)
+_freeJSInfo(void *dst)
 {
+    natsSysJSInfo *info = (natsSysJSInfo *) dst;
+
     sysclient_freeFields(info, _jsInfoFields, SYS_NFIELDS(_jsInfoFields));
     sysclient_freeJetStreamConfig(&info->Config);
     sysclient_freeObjectPtr((void **) &info->Meta, sysclient_freeMetaClusterInfo);
@@ -245,43 +234,15 @@ _freeJSInfo(natsSysJSInfo *info)
                            _freeAccountDetail);
 }
 
-static natsStatus
-_respFromMsg(void **newResp, natsMsg *msg)
-{
-    natsSysJszResp *resp;
-    natsStatus      s;
-
-    *newResp = NULL;
-
-    resp = (natsSysJszResp *) NATS_CALLOC(1, sizeof(natsSysJszResp));
-    if (resp == NULL)
-        return NATS_NO_MEMORY;
-
-    s = sysclient_decodeResp(msg, &resp->Server, &resp->Error, &resp->JSInfo, "data",
-                             _parseJSInfo);
-    if (s != NATS_OK)
-    {
-        natsSysJszResp_Destroy(resp);
-        return s;
-    }
-
-    *newResp = resp;
-    return NATS_OK;
-}
-
-static void
-_destroyResp(void *resp)
-{
-    natsSysJszResp_Destroy((natsSysJszResp *) resp);
-}
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysJszResp, JSInfo, SYS_SUBJ_JSZ, "data", 128,
+                                                  _marshalOptions, _parseJSInfo, _freeJSInfo);
 
 natsStatus
-natsSysClient_Jsz(natsSysJszResp **newResp, natsSysClient *client, const char *serverID,
-                  const natsSysJszOptions *opts, int64_t timeout)
+natsSysClient_Jsz(natsSysJszResp **newResp, natsSysClient *client,
+                  const char *serverID, const natsSysJszOptions *opts,
+                  int64_t timeout)
 {
-    return sysclient_request((void **) newResp, client, serverID, SYS_SUBJ_JSZ,
-                             _marshalOptions, opts, 128, timeout,
-                             _respFromMsg);
+    return sysclient_request((void **) newResp, client, serverID, opts, timeout, &_endpoint);
 }
 
 natsStatus
@@ -291,262 +252,14 @@ natsSysClient_JszPing(natsSysJszRespList *list, natsSysClient *client,
     if (list == NULL)
         return NATS_INVALID_ARG;
 
-    return sysclient_ping((void ***) &list->Resps, &list->Count, client, SYS_SUBJ_JSZ,
-                          _marshalOptions, opts, 128, timeout, _respFromMsg,
-                          _destroyResp);
-}
-
-natsStatus
-natsSysClient_JszEach(natsSysClient *client, const char *serverID,
-                      const natsSysJszOptions *opts, int64_t timeout,
-                      natsSysJszPageHandler handler, void *closure)
-{
-    natsSysJszOptions page;
-    natsSysJszOptions defaults;
-    int64_t           deadline;
-    int               offset;
-
-    if ((client == NULL) || (handler == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-
-    if (opts == NULL)
-    {
-        natsSysJszOptions_Init(&defaults);
-        opts = &defaults;
-    }
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-
-    deadline = sysclient_deadline(timeout);
-
-    // Without account details there is nothing to page over: one request,
-    // one page.
-    if (!opts->Accounts)
-    {
-        natsSysJszResp *resp = NULL;
-        natsStatus      s;
-
-        s = natsSysClient_Jsz(&resp, client, serverID, opts, timeout);
-        if (s != NATS_OK)
-            return s;
-
-        // Single page: there is nothing left for a false return to stop.
-        (void) handler(resp, closure);
-        natsSysJszResp_Destroy(resp);
-        return NATS_OK;
-    }
-
-    offset = opts->Offset;
-
-    for (;;)
-    {
-        natsSysJszResp *resp = NULL;
-        natsStatus      s;
-        int64_t         left;
-        int             received;
-        int             n;
-        int             total;
-        bool            wantMore;
-
-        left = deadline - sysclient_nowMs();
-        if (left <= 0)
-            return NATS_TIMEOUT;
-
-        page        = *opts;
-        page.Offset = offset;
-
-        s = natsSysClient_Jsz(&resp, client, serverID, &page, left);
-        if (s != NATS_OK)
-            return s;
-
-        n = resp->JSInfo.AccountDetailsCount;
-        // The total is the account count from the flattened JetStreamStats,
-        // not a dedicated field as in CONNZ and SUBSZ.
-        total    = resp->JSInfo.JetStreamStats.Accounts;
-        wantMore = handler(resp, closure);
-        natsSysJszResp_Destroy(resp);
-
-        if (!wantMore)
-            return NATS_OK;
-
-        received = offset + n;
-        if ((received >= total) || (n == 0))
-            return NATS_OK;
-
-        offset = received;
-    }
-}
-
-static void
-_walkDestroy(void *w)
-{
-    natsSysJszWalk *walk = (natsSysJszWalk *) w;
-
-    if (walk == NULL)
-        return;
-
-    natsSysJszResp_Destroy(walk->first);
-    _freeOptionsCopy(&walk->opts);
-    NATS_FREE(walk->serverID);
-    NATS_FREE(walk);
-}
-
-static natsStatus
-_initWalk(void *walkv, natsSysClient *client, const void *optsv, void *pagev)
-{
-    natsSysJszWalk *walk = (natsSysJszWalk *) walkv;
-    natsSysJszResp *page = (natsSysJszResp *) pagev;
-    natsStatus      s;
-
-    walk->client = client;
-
-    s = sysclient_walkServerID(&walk->serverID, page->Server.ID);
-    IFOK(s, _copyOptions(&walk->opts, (const natsSysJszOptions *) optsv));
-    if (s != NATS_OK)
-        return s;
-
-    walk->first  = page;
-    walk->total  = page->JSInfo.JetStreamStats.Accounts;
-    walk->offset = walk->opts.Offset;
-    return NATS_OK;
-}
-
-static const sysWalkOps _walkOps = {
-    sizeof(natsSysJszWalk),
-    _initWalk,
-    _walkDestroy,
-    _destroyResp,
-};
-
-natsStatus
-natsSysClient_JszPingEach(natsSysJszWalkList *list, natsSysClient *client,
-                          const natsSysJszOptions *opts, int64_t timeout)
-{
-    natsSysJszRespList pages = {NULL, 0};
-    natsStatus          s;
-
-    if ((list == NULL) || (client == NULL))
-        return NATS_INVALID_ARG;
-
-    list->Walks = NULL;
-    list->Count = 0;
-
-    s = natsSysClient_JszPing(&pages, client, opts, timeout);
-    if (s != NATS_OK)
-    {
-        natsSysJszRespList_Destroy(&pages);
-        return s;
-    }
-
-    return sysclient_buildWalks((void ***) &list->Walks, &list->Count, client,
-                                (void ***) &pages.Resps, &pages.Count, opts, &_walkOps);
-}
-
-const char *
-natsSysJszWalk_ServerID(const natsSysJszWalk *walk)
-{
-    return (walk != NULL) ? walk->serverID : NULL;
-}
-
-natsStatus
-natsSysJszWalk_Run(natsSysJszWalk *walk, int64_t timeout, natsSysJszPageHandler handler,
-                   void *closure)
-{
-    int64_t deadline;
-
-    if ((walk == NULL) || (handler == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-    if (walk->done)
-        return NATS_OK;
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-
-    deadline = sysclient_deadline(timeout);
-
-    if (walk->first != NULL)
-    {
-        natsSysJszResp *resp = walk->first;
-        int             n    = resp->JSInfo.AccountDetailsCount;
-        bool            wantMore;
-
-        walk->first = NULL;
-        wantMore    = handler(resp, closure);
-        natsSysJszResp_Destroy(resp);
-
-        walk->offset += n;
-
-        // See the note in connz.c on the empty-page guard.
-        // Nothing to page over unless account details were requested; with
-        // Accounts unset the loop below would not run anyway (total is 0).
-        if (!wantMore || !walk->opts.Accounts || (n == 0))
-        {
-            walk->done = true;
-            return NATS_OK;
-        }
-    }
-
-    while (walk->offset < walk->total)
-    {
-        natsSysJszOptions page;
-        natsSysJszResp   *resp = NULL;
-        natsStatus        s;
-        int64_t           left;
-        int               n;
-        bool              wantMore;
-
-        left = deadline - sysclient_nowMs();
-        if (left <= 0)
-            return NATS_TIMEOUT;
-
-        page        = walk->opts;
-        page.Offset = walk->offset;
-
-        s = natsSysClient_Jsz(&resp, walk->client, walk->serverID, &page, left);
-        if (s != NATS_OK)
-            return s;
-
-        n        = resp->JSInfo.AccountDetailsCount;
-        wantMore = handler(resp, closure);
-        natsSysJszResp_Destroy(resp);
-
-        if (!wantMore || (n == 0))
-        {
-            walk->done = true;
-            return NATS_OK;
-        }
-
-        walk->offset += n;
-    }
-
-    walk->done = true;
-    return NATS_OK;
-}
-
-void
-natsSysJszWalkList_Destroy(natsSysJszWalkList *list)
-{
-    if (list == NULL)
-        return;
-
-    sysclient_freeRespList((void ***) &list->Walks, &list->Count, _walkDestroy);
+    return sysclient_ping((void ***) &list->Resps, &list->Count, client, opts, timeout,
+                          &_endpoint);
 }
 
 void
 natsSysJszResp_Destroy(natsSysJszResp *resp)
 {
-    if (resp == NULL)
-        return;
-
-    sysclient_freeServerInfo(&resp->Server);
-    sysclient_freeAPIError(&resp->Error);
-    _freeJSInfo(&resp->JSInfo);
-    NATS_FREE(resp);
+    sysclient_destroyResp(resp, &_endpoint);
 }
 
 void
@@ -555,5 +268,112 @@ natsSysJszRespList_Destroy(natsSysJszRespList *list)
     if (list == NULL)
         return;
 
-    sysclient_freeRespList((void ***) &list->Resps, &list->Count, _destroyResp);
+    sysclient_freeList((void ***) &list->Resps, &list->Count, sysclient_destroyResp,
+                       &_endpoint);
+}
+
+//
+// Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
+//
+
+static natsStatus
+_copyOptionsV(void *dst, const void *src)
+{
+    return _copyOptions((natsSysJszOptions *) dst, (const natsSysJszOptions *) src);
+}
+
+static void
+_freeOptionsV(void *opts)
+{
+    _freeOptionsCopy((natsSysJszOptions *) opts);
+}
+
+// The options are borrowed, so the offset is advanced on a shallow copy. Only
+// scalars differ between pages, and the copy lives no longer than this call.
+static natsStatus
+_fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
+       int offset, int64_t timeout)
+{
+    natsSysJszOptions pageOpts;
+
+    if (optsv != NULL)
+        pageOpts = *(const natsSysJszOptions *) optsv;
+    else
+        natsSysJszOptions_Init(&pageOpts);
+    pageOpts.Offset = offset;
+
+    return natsSysClient_Jsz((natsSysJszResp **) page, client, serverID, &pageOpts, timeout);
+}
+
+static bool
+_isPaged(const void *optsv)
+{
+    const natsSysJszOptions *opts = (const natsSysJszOptions *) optsv;
+
+    return (opts != NULL) && opts->Accounts;
+}
+
+static const sysWalkOps _walkOps = {
+    &_endpoint,
+    sizeof(natsSysJszOptions),
+    SYS_INT_OFF(natsSysJszOptions, Offset),
+    SYS_INT_OFF(natsSysJszResp, JSInfo.AccountDetailsCount),
+    SYS_INT_OFF(natsSysJszResp, JSInfo.JetStreamStats.Accounts),
+    _copyOptionsV,
+    _freeOptionsV,
+    _fetch,
+    _isPaged,
+};
+
+SYS_WALK_SINK(natsSysJszPageHandler, natsSysJszResp)
+
+natsStatus
+natsSysClient_JszEach(natsSysClient *client, const char *serverID,
+                      const natsSysJszOptions *opts, int64_t timeout,
+                      natsSysJszPageHandler handler, void *closure)
+{
+    _sink sink = {handler, closure};
+
+    if (handler == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_walkEach(client, serverID, opts, timeout, _deliver, &sink, &_walkOps);
+}
+
+natsStatus
+natsSysClient_JszPingEach(natsSysJszWalkList *list, natsSysClient *client,
+                          const natsSysJszOptions *opts, int64_t timeout)
+{
+    if (list == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_pingEach((void ***) &list->Walks, &list->Count, client, opts, timeout,
+                              &_walkOps);
+}
+
+const char *
+natsSysJszWalk_ServerID(const natsSysJszWalk *walk)
+{
+    return sysclient_walkID((const sysWalk *) walk);
+}
+
+natsStatus
+natsSysJszWalk_Run(natsSysJszWalk *walk, int64_t timeout,
+                   natsSysJszPageHandler handler, void *closure)
+{
+    _sink sink = {handler, closure};
+
+    if (handler == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_walkRun((sysWalk *) walk, timeout, _deliver, &sink);
+}
+
+void
+natsSysJszWalkList_Destroy(natsSysJszWalkList *list)
+{
+    if (list == NULL)
+        return;
+
+    sysclient_freeList((void ***) &list->Walks, &list->Count, sysclient_walkDestroy, NULL);
 }

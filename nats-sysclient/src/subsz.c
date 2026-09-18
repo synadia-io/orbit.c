@@ -11,22 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The walk machinery here mirrors connz.c almost line for line, and jsz.c
-// carries a third near-copy. That is deliberate — but only for the page loop,
-// and the reason is narrow enough to be worth stating exactly.
-//
-// What is defended: `resp->Subsz.Total` and `resp->Subsz.SubsCount` are
-// checked by the compiler today. Behind a driver they become accessor
-// callbacks over a void *, where reaching for the wrong one is a silent error
-// in the pagination arithmetic — which is both where this port deliberately
-// deviates (the empty-page guard below) and what a reviewer most needs to read
-// closely. A shared driver would be shorter, and this is the price of not
-// having one.
-//
-// Note the page loop is the opposite call from the request/ping path in
-// sysclient.c, where the type erasure is confined to an options pointer that
-// each _marshalOptions re-types on its first line.
-
 #include "subsz.h"
 
 #include "marshal.h"
@@ -37,17 +21,6 @@
 #include "os_shims.h"
 
 #include <string.h>
-
-struct __natsSysSubszWalk
-{
-    natsSysClient      *client;   // borrowed; must outlive the walk
-    char               *serverID; // owned
-    natsSysSubszOptions opts;     // deep copy
-    natsSysSubszResp   *first;    // owned until delivered by the first _Run
-    int                 total;    // taken from the first page, never refreshed
-    int                 offset;   // offset of the next page to request
-    bool                done;
-};
 
 static const sysField _sublistStatsFields[] = {
     SYS_F(SYS_FLD_U32, natsSysSublistStats, NumSubs, "num_subscriptions"),
@@ -108,13 +81,16 @@ _copyOptions(natsSysSubszOptions *dst, const natsSysSubszOptions *src)
 {
     natsStatus s = NATS_OK;
 
-    natsSysSubszOptions_Init(dst);
     if (src == NULL)
-        return NATS_OK;
+        return natsSysSubszOptions_Init(dst);
 
-    dst->Offset        = src->Offset;
-    dst->Limit         = src->Limit;
-    dst->Subscriptions = src->Subscriptions;
+    // The struct copy carries every scalar, so a new one cannot be forgotten
+    // here. The members that need their own storage are then cleared before
+    // being copied, so a failure part-way leaves _freeOptionsCopy nothing but
+    // owned strings or NULL.
+    *dst = *src;
+    dst->Account = NULL;
+    dst->Test    = NULL;
 
     IFOK(s, sysclient_dupOptStr(&dst->Account, src->Account));
     IFOK(s, sysclient_dupOptStr(&dst->Test, src->Test));
@@ -135,6 +111,7 @@ _freeOptionsCopy(natsSysSubszOptions *opts)
 
 // The sublist keys are flattened into the SUBSZ object, so there is no nested
 // value whose absence would signal "no stats"; presence is tested key by key.
+// An explicit null counts as absent, as it does for every other decoder path.
 static bool
 _hasSublistStats(natsJSON *node)
 {
@@ -143,7 +120,8 @@ _hasSublistStats(natsJSON *node)
 
     for (i = 0; i < SYS_NFIELDS(_sublistStatsFields); i++)
     {
-        if (natsJSON_Field(node, _sublistStatsFields[i].Key, &field) == NATS_OK)
+        if ((natsJSON_Field(node, _sublistStatsFields[i].Key, &field) == NATS_OK)
+            && (natsJSON_Type(field) != NATS_JSON_NULL))
             return true;
     }
     return false;
@@ -183,8 +161,10 @@ _parseSubsz(void *dst, natsJSON *node)
 }
 
 static void
-_freeSubsz(natsSysSubsz *subsz)
+_freeSubsz(void *dst)
 {
+    natsSysSubsz *subsz = (natsSysSubsz *) dst;
+
     sysclient_freeFields(subsz, _subszFields, SYS_NFIELDS(_subszFields));
     sysclient_freeValueArray((void **) &subsz->Subs, &subsz->SubsCount,
                              sizeof(natsSysSubDetail), sysclient_freeSubDetail);
@@ -192,44 +172,15 @@ _freeSubsz(natsSysSubsz *subsz)
     subsz->SublistStats = NULL;
 }
 
-static natsStatus
-_respFromMsg(void **newResp, natsMsg *msg)
-{
-    natsSysSubszResp *resp;
-    natsStatus        s;
-
-    *newResp = NULL;
-
-    resp = (natsSysSubszResp *) NATS_CALLOC(1, sizeof(natsSysSubszResp));
-    if (resp == NULL)
-        return NATS_NO_MEMORY;
-
-    s = sysclient_decodeResp(msg, &resp->Server, &resp->Error, &resp->Subsz, "data",
-                             _parseSubsz);
-    if (s != NATS_OK)
-    {
-        natsSysSubszResp_Destroy(resp);
-        return s;
-    }
-
-    *newResp = resp;
-    return NATS_OK;
-}
-
-static void
-_destroyResp(void *resp)
-{
-    natsSysSubszResp_Destroy((natsSysSubszResp *) resp);
-}
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysSubszResp, Subsz, SYS_SUBJ_SUBSZ, "data", 128,
+                                                  _marshalOptions, _parseSubsz, _freeSubsz);
 
 natsStatus
 natsSysClient_Subsz(natsSysSubszResp **newResp, natsSysClient *client,
                     const char *serverID, const natsSysSubszOptions *opts,
                     int64_t timeout)
 {
-    return sysclient_request((void **) newResp, client, serverID, SYS_SUBJ_SUBSZ,
-                             _marshalOptions, opts, 128, timeout,
-                             _respFromMsg);
+    return sysclient_request((void **) newResp, client, serverID, opts, timeout, &_endpoint);
 }
 
 natsStatus
@@ -239,245 +190,14 @@ natsSysClient_SubszPing(natsSysSubszRespList *list, natsSysClient *client,
     if (list == NULL)
         return NATS_INVALID_ARG;
 
-    return sysclient_ping((void ***) &list->Resps, &list->Count, client, SYS_SUBJ_SUBSZ,
-                          _marshalOptions, opts, 128, timeout, _respFromMsg,
-                          _destroyResp);
-}
-
-natsStatus
-natsSysClient_SubszEach(natsSysClient *client, const char *serverID,
-                        const natsSysSubszOptions *opts, int64_t timeout,
-                        natsSysSubszPageHandler handler, void *closure)
-{
-    natsSysSubszOptions page;
-    natsSysSubszOptions defaults;
-    int64_t             deadline;
-    int                 offset;
-
-    if ((client == NULL) || (handler == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-
-    if (opts == NULL)
-    {
-        natsSysSubszOptions_Init(&defaults);
-        opts = &defaults;
-    }
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-
-    deadline = sysclient_deadline(timeout);
-    offset   = opts->Offset;
-
-    for (;;)
-    {
-        natsSysSubszResp *resp = NULL;
-        natsStatus        s;
-        int64_t           left;
-        int               received;
-        int               n;
-        int               total;
-        bool              wantMore;
-
-        left = deadline - sysclient_nowMs();
-        if (left <= 0)
-            return NATS_TIMEOUT;
-
-        page        = *opts;
-        page.Offset = offset;
-
-        s = natsSysClient_Subsz(&resp, client, serverID, &page, left);
-        if (s != NATS_OK)
-            return s;
-
-        n        = resp->Subsz.SubsCount;
-        total    = resp->Subsz.Total;
-        wantMore = handler(resp, closure);
-        natsSysSubszResp_Destroy(resp);
-
-        if (!wantMore)
-            return NATS_OK;
-
-        received = offset + n;
-        if ((received >= total) || (n == 0))
-            return NATS_OK;
-
-        offset = received;
-    }
-}
-
-static void
-_walkDestroy(void *w)
-{
-    natsSysSubszWalk *walk = (natsSysSubszWalk *) w;
-
-    if (walk == NULL)
-        return;
-
-    natsSysSubszResp_Destroy(walk->first);
-    _freeOptionsCopy(&walk->opts);
-    NATS_FREE(walk->serverID);
-    NATS_FREE(walk);
-}
-
-// The two assignments that read the page are the reason this stays here rather
-// than moving into the shared driver: both are compiler-checked against the
-// SUBSZ response type.
-static natsStatus
-_initWalk(void *walkv, natsSysClient *client, const void *optsv, void *pagev)
-{
-    natsSysSubszWalk *walk = (natsSysSubszWalk *) walkv;
-    natsSysSubszResp *page = (natsSysSubszResp *) pagev;
-    natsStatus      s;
-
-    walk->client = client;
-
-    s = sysclient_walkServerID(&walk->serverID, page->Server.ID);
-    IFOK(s, _copyOptions(&walk->opts, (const natsSysSubszOptions *) optsv));
-    if (s != NATS_OK)
-        return s;
-
-    walk->first  = page;
-    walk->total  = page->Subsz.Total;
-    walk->offset = walk->opts.Offset;
-    return NATS_OK;
-}
-
-static const sysWalkOps _walkOps = {
-    sizeof(natsSysSubszWalk),
-    _initWalk,
-    _walkDestroy,
-    _destroyResp,
-};
-
-natsStatus
-natsSysClient_SubszPingEach(natsSysSubszWalkList *list, natsSysClient *client,
-                          const natsSysSubszOptions *opts, int64_t timeout)
-{
-    natsSysSubszRespList pages = {NULL, 0};
-    natsStatus          s;
-
-    if ((list == NULL) || (client == NULL))
-        return NATS_INVALID_ARG;
-
-    list->Walks = NULL;
-    list->Count = 0;
-
-    s = natsSysClient_SubszPing(&pages, client, opts, timeout);
-    if (s != NATS_OK)
-    {
-        natsSysSubszRespList_Destroy(&pages);
-        return s;
-    }
-
-    return sysclient_buildWalks((void ***) &list->Walks, &list->Count, client,
-                                (void ***) &pages.Resps, &pages.Count, opts, &_walkOps);
-}
-
-const char *
-natsSysSubszWalk_ServerID(const natsSysSubszWalk *walk)
-{
-    return (walk != NULL) ? walk->serverID : NULL;
-}
-
-natsStatus
-natsSysSubszWalk_Run(natsSysSubszWalk *walk, int64_t timeout,
-                     natsSysSubszPageHandler handler, void *closure)
-{
-    int64_t deadline;
-
-    if ((walk == NULL) || (handler == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-    if (walk->done)
-        return NATS_OK;
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-
-    deadline = sysclient_deadline(timeout);
-
-    if (walk->first != NULL)
-    {
-        natsSysSubszResp *resp = walk->first;
-        int               n    = resp->Subsz.SubsCount;
-        bool              wantMore;
-
-        walk->first = NULL;
-        wantMore    = handler(resp, closure);
-        natsSysSubszResp_Destroy(resp);
-
-        walk->offset += n;
-
-        // See the note in connz.c: this empty-page guard is a deliberate
-        // deviation from orbit.go, whose per-server ping iterators lack it and
-        // can spin forever.
-        if (!wantMore || (n == 0))
-        {
-            walk->done = true;
-            return NATS_OK;
-        }
-    }
-
-    while (walk->offset < walk->total)
-    {
-        natsSysSubszOptions page;
-        natsSysSubszResp   *resp = NULL;
-        natsStatus          s;
-        int64_t             left;
-        int                 n;
-        bool                wantMore;
-
-        left = deadline - sysclient_nowMs();
-        if (left <= 0)
-            return NATS_TIMEOUT;
-
-        page        = walk->opts;
-        page.Offset = walk->offset;
-
-        s = natsSysClient_Subsz(&resp, walk->client, walk->serverID, &page, left);
-        if (s != NATS_OK)
-            return s;
-
-        n        = resp->Subsz.SubsCount;
-        wantMore = handler(resp, closure);
-        natsSysSubszResp_Destroy(resp);
-
-        if (!wantMore || (n == 0))
-        {
-            walk->done = true;
-            return NATS_OK;
-        }
-
-        walk->offset += n;
-    }
-
-    walk->done = true;
-    return NATS_OK;
-}
-
-void
-natsSysSubszWalkList_Destroy(natsSysSubszWalkList *list)
-{
-    if (list == NULL)
-        return;
-
-    sysclient_freeRespList((void ***) &list->Walks, &list->Count, _walkDestroy);
+    return sysclient_ping((void ***) &list->Resps, &list->Count, client, opts, timeout,
+                          &_endpoint);
 }
 
 void
 natsSysSubszResp_Destroy(natsSysSubszResp *resp)
 {
-    if (resp == NULL)
-        return;
-
-    sysclient_freeServerInfo(&resp->Server);
-    sysclient_freeAPIError(&resp->Error);
-    _freeSubsz(&resp->Subsz);
-    NATS_FREE(resp);
+    sysclient_destroyResp(resp, &_endpoint);
 }
 
 void
@@ -486,5 +206,104 @@ natsSysSubszRespList_Destroy(natsSysSubszRespList *list)
     if (list == NULL)
         return;
 
-    sysclient_freeRespList((void ***) &list->Resps, &list->Count, _destroyResp);
+    sysclient_freeList((void ***) &list->Resps, &list->Count, sysclient_destroyResp,
+                       &_endpoint);
+}
+
+//
+// Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
+//
+
+static natsStatus
+_copyOptionsV(void *dst, const void *src)
+{
+    return _copyOptions((natsSysSubszOptions *) dst, (const natsSysSubszOptions *) src);
+}
+
+static void
+_freeOptionsV(void *opts)
+{
+    _freeOptionsCopy((natsSysSubszOptions *) opts);
+}
+
+// The options are borrowed, so the offset is advanced on a shallow copy. Only
+// scalars differ between pages, and the copy lives no longer than this call.
+static natsStatus
+_fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
+       int offset, int64_t timeout)
+{
+    natsSysSubszOptions pageOpts;
+
+    if (optsv != NULL)
+        pageOpts = *(const natsSysSubszOptions *) optsv;
+    else
+        natsSysSubszOptions_Init(&pageOpts);
+    pageOpts.Offset = offset;
+
+    return natsSysClient_Subsz((natsSysSubszResp **) page, client, serverID, &pageOpts, timeout);
+}
+
+static const sysWalkOps _walkOps = {
+    &_endpoint,
+    sizeof(natsSysSubszOptions),
+    SYS_INT_OFF(natsSysSubszOptions, Offset),
+    SYS_INT_OFF(natsSysSubszResp, Subsz.SubsCount),
+    SYS_INT_OFF(natsSysSubszResp, Subsz.Total),
+    _copyOptionsV,
+    _freeOptionsV,
+    _fetch,
+    NULL,
+};
+
+SYS_WALK_SINK(natsSysSubszPageHandler, natsSysSubszResp)
+
+natsStatus
+natsSysClient_SubszEach(natsSysClient *client, const char *serverID,
+                        const natsSysSubszOptions *opts, int64_t timeout,
+                        natsSysSubszPageHandler handler, void *closure)
+{
+    _sink sink = {handler, closure};
+
+    if (handler == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_walkEach(client, serverID, opts, timeout, _deliver, &sink, &_walkOps);
+}
+
+natsStatus
+natsSysClient_SubszPingEach(natsSysSubszWalkList *list, natsSysClient *client,
+                            const natsSysSubszOptions *opts, int64_t timeout)
+{
+    if (list == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_pingEach((void ***) &list->Walks, &list->Count, client, opts, timeout,
+                              &_walkOps);
+}
+
+const char *
+natsSysSubszWalk_ServerID(const natsSysSubszWalk *walk)
+{
+    return sysclient_walkID((const sysWalk *) walk);
+}
+
+natsStatus
+natsSysSubszWalk_Run(natsSysSubszWalk *walk, int64_t timeout,
+                     natsSysSubszPageHandler handler, void *closure)
+{
+    _sink sink = {handler, closure};
+
+    if (handler == NULL)
+        return NATS_INVALID_ARG;
+
+    return sysclient_walkRun((sysWalk *) walk, timeout, _deliver, &sink);
+}
+
+void
+natsSysSubszWalkList_Destroy(natsSysSubszWalkList *list)
+{
+    if (list == NULL)
+        return;
+
+    sysclient_freeList((void ***) &list->Walks, &list->Count, sysclient_walkDestroy, NULL);
 }

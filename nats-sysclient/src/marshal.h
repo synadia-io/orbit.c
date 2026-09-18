@@ -44,6 +44,7 @@ sysclient_optBool(natsJSONWriter *w, const char *key, bool val);
 natsStatus
 sysclient_optInt(natsJSONWriter *w, const char *key, int64_t val);
 
+// Rejects a NULL entry with NATS_INVALID_ARG, poisoning the writer.
 natsStatus
 sysclient_optStrArray(natsJSONWriter *w, const char *key, const char *const *vals, int count);
 

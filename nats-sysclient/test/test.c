@@ -919,6 +919,33 @@ test_FieldRanges(void)
     s        = natsSysClient_Statsz(&statsz, sys, "SRV1", NULL, 2000);
     testCond((s == NATS_ERR) && (statsz == NULL));
 
+    test("A route's pending byte count above INT_MAX decodes: ");
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"statsz\":"
+               "{\"routes\":[{\"rid\":1,\"pending\":3221225472}]}}";
+    s        = natsSysClient_Statsz(&statsz, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_OK) && (statsz != NULL) && (statsz->Statsz.RoutesCount == 1)
+             && (statsz->Statsz.Routes[0]->Pending == 3221225472LL));
+    natsSysStatszResp_Destroy(statsz);
+    statsz = NULL;
+
+    natsSubscription_Destroy(sub);
+
+    test("Subscribe a CONNZ stand-in: ");
+    s = natsConnection_Subscribe(&sub, nc, "$SYS.REQ.SERVER.*.CONNZ", _healthzResponder, &fr);
+    testCond(s == NATS_OK);
+
+    test("A connection's pending byte count above INT_MAX decodes: ");
+    {
+        natsSysConnzResp *connz = NULL;
+
+        fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":"
+                   "{\"connections\":[{\"cid\":1,\"pending_bytes\":3221225472}]}}";
+        s        = natsSysClient_Connz(&connz, sys, "SRV1", NULL, 2000);
+        testCond((s == NATS_OK) && (connz != NULL) && (connz->Connz.ConnsCount == 1)
+                 && (connz->Connz.Conns[0]->Pending == 3221225472LL));
+        natsSysConnzResp_Destroy(connz);
+    }
+
     natsSubscription_Destroy(sub);
     TEARDOWN;
 }
@@ -1536,6 +1563,21 @@ test_VarzRequestPayload(void)
                     "{\"server_name\":\"s1\",\"cluster\":\"C1\",\"host\":\"10.0.0.1\","
                     "\"tags\":[\"az:a\",\"az:b\"],\"domain\":\"hub\"}")
              == 0);
+
+    // A partly filled array is a caller bug. Serialized, the NULL would become
+    // "" and match no server: the ping would come back empty and the by-ID
+    // request time out, with nothing to say why.
+    test("A NULL tag entry is rejected before anything is sent: ");
+    {
+        const char *holey[] = {"az:a", NULL};
+
+        natsSysVarzOptions_Init(&opts);
+        opts.Filter.Tags      = holey;
+        opts.Filter.TagsCount = 2;
+        fr.lastRequest[0]     = '\0';
+        s                     = natsSysClient_Varz(&resp, sys, "SRV1", &opts, 2000);
+        testCond((s == NATS_INVALID_ARG) && (resp == NULL) && (fr.lastRequest[0] == '\0'));
+    }
 
     natsSubscription_Destroy(sub);
     TEARDOWN;
@@ -2263,6 +2305,15 @@ test_Subsz(void)
              && (resp->Subsz.SublistStats->MaxFanout == 9)
              && (resp->Subsz.SublistStats->NumSubs == 0));
 
+    // Every other decoder path treats an explicit null as absent; an all-zero
+    // SublistStats here would read as genuine statistics.
+    test("An explicit null sublist key counts as absent: ");
+    natsSysSubszResp_Destroy(resp);
+    resp     = NULL;
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"num_subscriptions\":null}}";
+    s        = natsSysClient_Subsz(&resp, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_OK) && (resp->Subsz.SublistStats == NULL));
+
     natsSysSubszResp_Destroy(resp);
     natsSubscription_Destroy(sub);
     TEARDOWN;
@@ -2676,7 +2727,7 @@ test_Jsz(void)
         "\"config\":{\"name\":\"orders\",\"subjects\":[\"o.>\"],\"max_msgs\":-1},"
         "\"state\":{\"messages\":10,\"bytes\":100},"
         "\"consumer_detail\":[{\"name\":\"c1\"},{\"name\":\"c2\"}],"
-        "\"mirror\":{\"name\":\"m\"},"
+        "\"mirror\": {\"name\": \"m\"},"
         "\"sources\":[{\"name\":\"s\"}],"
         "\"stream_raft_group\":\"RG1\","
         "\"consumer_raft_groups\":[{\"name\":\"c1\",\"raft_group\":\"RGC1\"}]}]}]}}";
@@ -2733,6 +2784,8 @@ test_Jsz(void)
              && (resp->JSInfo.AccountDetails[0]->Streams[0].Created != NULL));
 
     // The six subtrees cnats cannot unmarshal come back as JSON text.
+    // Verbatim, whitespace and all: the text is sliced out of the reply rather
+    // than re-serialized, which is why "mirror" keeps its spaces.
     test("Stream subtrees come back as raw JSON: ");
     {
         natsSysStreamDetail *sd = &resp->JSInfo.AccountDetails[0]->Streams[0];
@@ -2743,7 +2796,7 @@ test_Jsz(void)
                             "\"max_msgs\":-1}")
                      == 0)
                  && (strcmp(sd->StateJSON, "{\"messages\":10,\"bytes\":100}") == 0)
-                 && (strcmp(sd->MirrorJSON, "{\"name\":\"m\"}") == 0)
+                 && (strcmp(sd->MirrorJSON, "{\"name\": \"m\"}") == 0)
                  && (sd->ConsumerJSONCount == 2)
                  && (strcmp(sd->ConsumerJSON[0], "{\"name\":\"c1\"}") == 0)
                  && (strcmp(sd->ConsumerJSON[1], "{\"name\":\"c2\"}") == 0)

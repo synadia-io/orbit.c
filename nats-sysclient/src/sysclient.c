@@ -107,6 +107,37 @@ natsSysClient_Destroy(natsSysClient *client)
     NATS_FREE(client);
 }
 
+// The longest timeout honoured, in milliseconds. Seven days is far beyond any
+// real monitoring request, and bounding it keeps every millisecond value this
+// library hands downwards small enough to survive being turned into a deadline:
+// both cnats and nats-extra compute `now + timeout` into an int64, which
+// overflows for values near INT64_MAX.
+#define MAX_TIMEOUT_MS ((int64_t) 7 * 24 * 60 * 60 * 1000)
+
+// The one timeout policy every public entry point applies: a negative value
+// is the caller's error, 0 selects NATS_SYS_DEFAULT_REQUEST_TIMEOUT, and the
+// result is capped so that INT64_MAX means "no practical limit" everywhere
+// rather than only inside a page loop.
+static natsStatus
+_checkTimeout(int64_t *timeout)
+{
+    if (*timeout < 0)
+        return NATS_INVALID_ARG;
+    if (*timeout == 0)
+        *timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
+    if (*timeout > MAX_TIMEOUT_MS)
+        *timeout = MAX_TIMEOUT_MS;
+    return NATS_OK;
+}
+
+// Milliseconds from a monotonic clock, for whole-walk deadlines. Matches how
+// nats-extra/src/requestmany.c measures its own budget.
+static int64_t
+_nowMs(void)
+{
+    return nats_NowMonotonicInNanoSeconds() / 1000000;
+}
+
 // Formats one of the SYS_SUBJ_* templates with a server ID or "PING".
 static natsStatus
 _buildSubject(char **out, const char *fmt, const char *target)
@@ -127,10 +158,10 @@ _buildSubject(char **out, const char *fmt, const char *target)
     return NATS_OK;
 }
 
-natsStatus
-sysclient_requestByID(natsMsg **replyMsg, natsSysClient *client, const char *serverID,
-                      const char *subjFmt, const char *payload, int payloadLen,
-                      int64_t timeout)
+// Sends a marshalled request to one server and waits for its reply.
+static natsStatus
+_requestByID(natsMsg **replyMsg, natsSysClient *client, const char *serverID,
+             const char *subjFmt, const char *payload, int payloadLen, int64_t timeout)
 {
     natsStatus s;
     char      *subj = NULL;
@@ -139,16 +170,11 @@ sysclient_requestByID(natsMsg **replyMsg, natsSysClient *client, const char *ser
         return NATS_INVALID_ARG;
     if (nats_IsStringEmpty(serverID))
         return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
 
     *replyMsg = NULL;
 
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-    timeout = sysclient_capTimeout(timeout);
-
-    s = _buildSubject(&subj, subjFmt, serverID);
+    s = _checkTimeout(&timeout);
+    IFOK(s, _buildSubject(&subj, subjFmt, serverID));
     if (s != NATS_OK)
         return s;
 
@@ -164,24 +190,19 @@ sysclient_requestByID(natsMsg **replyMsg, natsSysClient *client, const char *ser
     return s;
 }
 
-natsStatus
-sysclient_pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
-                      const char *payload, int payloadLen, int64_t timeout)
+// Scatters a marshalled request to every server and gathers the raw replies.
+// Always destroy *list with natsMsgList_Destroy unless the return was
+// NATS_INVALID_ARG.
+static natsStatus
+_pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
+             const char *payload, int payloadLen, int64_t timeout)
 {
     natsStatus          s;
     char               *subj = NULL;
     natsRequestManyOpts rmOpts;
 
-    if ((list == NULL) || (client == NULL) || (subjFmt == NULL))
-        return NATS_INVALID_ARG;
-    if (timeout < 0)
-        return NATS_INVALID_ARG;
-
-    if (timeout == 0)
-        timeout = NATS_SYS_DEFAULT_REQUEST_TIMEOUT;
-    timeout = sysclient_capTimeout(timeout);
-
-    s = _buildSubject(&subj, subjFmt, SYS_PING_TARGET);
+    s = _checkTimeout(&timeout);
+    IFOK(s, _buildSubject(&subj, subjFmt, SYS_PING_TARGET));
     if (s != NATS_OK)
         return s;
 
@@ -211,68 +232,127 @@ sysclient_pingServers(natsMsgList *list, natsSysClient *client, const char *subj
     return s;
 }
 
-natsStatus
-sysclient_decodeResp(natsMsg *msg, natsSysServerInfo *server, natsSysAPIError *apiErr,
-                     void *payloadDst, const char *payloadKey, sysParseFn parsePayload)
+// The three envelope members of a response, located through its descriptor.
+#define RESP_SERVER(r, ep)  ((natsSysServerInfo *) ((char *) (r) + (ep)->ServerOff))
+#define RESP_ERROR(r, ep)   ((natsSysAPIError *) ((char *) (r) + (ep)->ErrorOff))
+#define RESP_PAYLOAD(r, ep) ((void *) ((char *) (r) + (ep)->PayloadOff))
+
+void
+sysclient_destroyResp(void *resp, const void *epv)
+{
+    const sysEndpoint *ep = (const sysEndpoint *) epv;
+
+    if ((resp == NULL) || (ep == NULL))
+        return;
+
+    sysclient_freeServerInfo(RESP_SERVER(resp, ep));
+    sysclient_freeAPIError(RESP_ERROR(resp, ep));
+    ep->FreePayload(RESP_PAYLOAD(resp, ep));
+    NATS_FREE(resp);
+}
+
+// Decodes one reply into a freshly allocated, fully-owned response; *newResp
+// is NULL on error. The status is already mapped through
+// sysclient_responseStatus().
+static natsStatus
+_respFromMsg(void **newResp, natsMsg *msg, const sysEndpoint *ep)
 {
     natsStatus s;
     natsJSON  *root    = NULL;
     natsJSON  *payload = NULL;
+    void      *resp;
 
-    if ((msg == NULL) || (parsePayload == NULL))
-        return NATS_INVALID_ARG;
+    *newResp = NULL;
+
+    resp = NATS_CALLOC(1, ep->RespSize);
+    if (resp == NULL)
+        return NATS_NO_MEMORY;
 
     s = natsJSON_Parse(&root, natsMsg_GetData(msg), natsMsg_GetDataLength(msg));
-    IFOK(s, sysclient_parseEnvelope(server, apiErr, &payload, root, payloadKey));
+    IFOK(s, sysclient_parseEnvelope(RESP_SERVER(resp, ep), RESP_ERROR(resp, ep), &payload,
+                                    root, ep->PayloadKey));
 
     // A server reporting an error sends no payload, so an absent key is not a
-    // failure; the caller checks apiErr.
+    // failure; the caller checks the Error member.
     if ((s == NATS_OK) && (payload != NULL))
-        s = parsePayload(payloadDst, payload);
+        s = ep->ParsePayload(RESP_PAYLOAD(resp, ep), payload);
 
+    // The tree borrows the message text for its raw spans (natsJSON_Raw), so
+    // it goes first and the caller's message stays alive until after this.
     natsJSON_Destroy(root);
-    return sysclient_responseStatus(s);
+
+    s = sysclient_responseStatus(s);
+    if (s != NATS_OK)
+    {
+        sysclient_destroyResp(resp, ep);
+        return s;
+    }
+
+    *newResp = resp;
+    return NATS_OK;
 }
 
 natsStatus
-sysclient_pingList(void ***resps, int *count, natsSysClient *client, const char *subjFmt,
-                   const char *payload, int payloadLen, int64_t timeout,
-                   sysRespFromMsgFn fromMsg, sysRespDestroyFn destroyResp)
+sysclient_request(void **newResp, natsSysClient *client, const char *serverID,
+                  const void *opts, int64_t timeout, const sysEndpoint *ep)
+{
+    natsStatus s;
+    natsBuffer buf   = NATS_EMPTY_BUFFER;
+    natsMsg   *reply = NULL;
+
+    if ((newResp == NULL) || (client == NULL) || (ep == NULL))
+        return NATS_INVALID_ARG;
+
+    *newResp = NULL;
+
+    s = natsBuf_Init(&buf, ep->BufHint);
+    IFOK(s, ep->Marshal(&buf, opts));
+    if (s == NATS_OK)
+        s = _requestByID(&reply, client, serverID, ep->Subject, natsBuf_Data(&buf),
+                                  natsBuf_Len(&buf), timeout);
+    natsBuf_Destroy(&buf);
+    if (s != NATS_OK)
+        return s;
+
+    s = _respFromMsg(newResp, reply, ep);
+    natsMsg_Destroy(reply);
+    return s;
+}
+
+natsStatus
+sysclient_ping(void ***resps, int *count, natsSysClient *client, const void *opts,
+               int64_t timeout, const sysEndpoint *ep)
 {
     natsStatus  s;
+    natsBuffer  buf  = NATS_EMPTY_BUFFER;
     natsMsgList msgs = {NULL, 0};
-    void      **arr;
-    int         n = 0;
+    void      **arr  = NULL;
+    int         n    = 0;
     int         i;
 
-    if ((resps == NULL) || (count == NULL) || (fromMsg == NULL) || (destroyResp == NULL))
+    if ((resps == NULL) || (count == NULL) || (client == NULL) || (ep == NULL))
         return NATS_INVALID_ARG;
 
     *resps = NULL;
     *count = 0;
 
-    s = sysclient_pingServers(&msgs, client, subjFmt, payload, payloadLen, timeout);
-    if (s != NATS_OK)
+    s = natsBuf_Init(&buf, ep->BufHint);
+    IFOK(s, ep->Marshal(&buf, opts));
+    if (s == NATS_OK)
+        s = _pingServers(&msgs, client, ep->Subject, natsBuf_Data(&buf), natsBuf_Len(&buf),
+                         timeout);
+    natsBuf_Destroy(&buf);
+
+    if ((s == NATS_OK) && (msgs.Count > 0))
     {
-        natsMsgList_Destroy(&msgs);
-        return s;
-    }
-    if (msgs.Count == 0)
-    {
-        natsMsgList_Destroy(&msgs);
-        return NATS_OK;
+        arr = (void **) NATS_CALLOC((size_t) msgs.Count, sizeof(void *));
+        if (arr == NULL)
+            s = NATS_NO_MEMORY;
     }
 
-    arr = (void **) NATS_CALLOC((size_t) msgs.Count, sizeof(void *));
-    if (arr == NULL)
+    for (i = 0; (s == NATS_OK) && (i < msgs.Count); i++)
     {
-        natsMsgList_Destroy(&msgs);
-        return NATS_NO_MEMORY;
-    }
-
-    for (i = 0; (i < msgs.Count) && (s == NATS_OK); i++)
-    {
-        s = fromMsg(&arr[n], msgs.Msgs[i]);
+        s = _respFromMsg(&arr[n], msgs.Msgs[i], ep);
         if (s == NATS_OK)
             n++;
     }
@@ -283,9 +363,7 @@ sysclient_pingList(void ***resps, int *count, natsSysClient *client, const char 
     // partial one.
     if (s != NATS_OK)
     {
-        for (i = 0; i < n; i++)
-            destroyResp(arr[i]);
-        NATS_FREE(arr);
+        sysclient_freeList(&arr, &n, sysclient_destroyResp, ep);
         return s;
     }
 
@@ -294,133 +372,279 @@ sysclient_pingList(void ***resps, int *count, natsSysClient *client, const char 
     return NATS_OK;
 }
 
-natsStatus
-sysclient_request(void **newResp, natsSysClient *client, const char *serverID,
-                  const char *subjFmt, sysMarshalFn marshal, const void *opts,
-                  int bufHint, int64_t timeout, sysRespFromMsgFn fromMsg)
-{
-    natsStatus s;
-    natsBuffer buf   = NATS_EMPTY_BUFFER;
-    natsMsg   *reply = NULL;
-
-    if ((newResp == NULL) || (client == NULL) || (marshal == NULL) || (fromMsg == NULL))
-        return NATS_INVALID_ARG;
-
-    *newResp = NULL;
-
-    s = natsBuf_Init(&buf, bufHint);
-    IFOK(s, marshal(&buf, opts));
-    if (s == NATS_OK)
-        s = sysclient_requestByID(&reply, client, serverID, subjFmt, natsBuf_Data(&buf),
-                                  natsBuf_Len(&buf), timeout);
-    natsBuf_Destroy(&buf);
-    if (s != NATS_OK)
-        return s;
-
-    s = fromMsg(newResp, reply);
-    natsMsg_Destroy(reply);
-    return s;
-}
-
-natsStatus
-sysclient_ping(void ***resps, int *count, natsSysClient *client, const char *subjFmt,
-               sysMarshalFn marshal, const void *opts, int bufHint, int64_t timeout,
-               sysRespFromMsgFn fromMsg, sysRespDestroyFn destroyResp)
-{
-    natsStatus s;
-    natsBuffer buf = NATS_EMPTY_BUFFER;
-
-    if ((resps == NULL) || (count == NULL) || (client == NULL) || (marshal == NULL))
-        return NATS_INVALID_ARG;
-
-    *resps = NULL;
-    *count = 0;
-
-    s = natsBuf_Init(&buf, bufHint);
-    IFOK(s, marshal(&buf, opts));
-    if (s == NATS_OK)
-        s = sysclient_pingList(resps, count, client, subjFmt, natsBuf_Data(&buf),
-                               natsBuf_Len(&buf), timeout, fromMsg, destroyResp);
-    natsBuf_Destroy(&buf);
-    return s;
-}
-
-natsStatus
-sysclient_buildWalks(void ***walks, int *walkCount, natsSysClient *client, void ***pages,
-                     int *pageCount, const void *opts, const sysWalkOps *ops)
-{
-    natsStatus s = NATS_OK;
-    void     **arr;
-    int        count;
-    int        i;
-
-    if ((walks == NULL) || (walkCount == NULL) || (client == NULL) || (pages == NULL)
-        || (pageCount == NULL) || (ops == NULL) || (ops->WalkSize == 0)
-        || (ops->InitWalk == NULL) || (ops->DestroyWalk == NULL)
-        || (ops->DestroyPage == NULL))
-        return NATS_INVALID_ARG;
-
-    *walks     = NULL;
-    *walkCount = 0;
-
-    count = *pageCount;
-    if (count == 0)
-    {
-        sysclient_freeRespList(pages, pageCount, ops->DestroyPage);
-        return NATS_OK;
-    }
-
-    arr = (void **) NATS_CALLOC((size_t) count, sizeof(void *));
-    if (arr == NULL)
-    {
-        sysclient_freeRespList(pages, pageCount, ops->DestroyPage);
-        return NATS_NO_MEMORY;
-    }
-
-    for (i = 0; (i < count) && (s == NATS_OK); i++)
-    {
-        arr[i] = NATS_CALLOC(1, ops->WalkSize);
-        if (arr[i] == NULL)
-        {
-            s = NATS_NO_MEMORY;
-            break;
-        }
-
-        // the slot is cleared to keep the release below from freeing it a second time
-        s = ops->InitWalk(arr[i], client, opts, (*pages)[i]);
-        if (s == NATS_OK)
-            (*pages)[i] = NULL;
-    }
-
-    sysclient_freeRespList(pages, pageCount, ops->DestroyPage);
-
-    if (s != NATS_OK)
-    {
-        sysclient_freeRespList(&arr, &count, ops->DestroyWalk);
-        return s;
-    }
-
-    *walks     = arr;
-    *walkCount = count;
-    return NATS_OK;
-}
-
 void
-sysclient_freeRespList(void ***resps, int *count, sysRespDestroyFn destroyResp)
+sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *ctx)
 {
     void **arr;
     int    i;
 
-    if ((resps == NULL) || (count == NULL) || (destroyResp == NULL))
+    if ((items == NULL) || (count == NULL))
         return;
 
-    arr = *resps;
-    for (i = 0; (arr != NULL) && (i < *count); i++)
-        destroyResp(arr[i]);
+    arr = *items;
+    for (i = 0; (arr != NULL) && (destroy != NULL) && (i < *count); i++)
+        destroy(arr[i], ctx);
 
     NATS_FREE(arr);
-    *resps = NULL;
+    *items = NULL;
     *count = 0;
+}
+
+//
+// Page walks.
+//
+
+// The int members a walk table locates by offset.
+#define WALK_INT(base, off) (*(int *) ((char *) (base) + (off)))
+
+// Fetches and delivers one page, advancing *offset past it. With 'refresh'
+// set, *total is re-read from the page; otherwise the caller's value stands.
+// 'stop' is set when the handler declined more, the page was empty, or the
+// reported total has been covered.
+static natsStatus
+_walkPage(natsSysClient *client, const char *serverID, const void *opts, int *offset,
+          int *total, bool refresh, int64_t deadline, sysPageHandler handler,
+          void *closure, const sysWalkOps *ops, bool *stop)
+{
+    void      *page = NULL;
+    natsStatus s;
+    int64_t    left;
+    int        n;
+    bool       wantMore;
+
+    left = deadline - _nowMs();
+    if (left <= 0)
+        return NATS_TIMEOUT;
+
+    // By ID, not by ping. A server that left the cluster meanwhile yields
+    // NATS_NOT_FOUND.
+    s = ops->Fetch(&page, client, serverID, opts, *offset, left);
+    if (s != NATS_OK)
+        return s;
+
+    n = WALK_INT(page, ops->CountOff);
+    if (refresh)
+        *total = WALK_INT(page, ops->TotalOff);
+    wantMore = handler(page, closure);
+    sysclient_destroyResp(page, ops->Endpoint);
+
+    *offset += n;
+
+    // Stop once the reported total is covered, and also on an empty page so a
+    // shrinking result set cannot loop forever. The latter is a deliberate
+    // deviation from orbit.go, whose per-server ping iterators lack it.
+    *stop = (!wantMore || (n == 0) || (*offset >= *total));
+    return NATS_OK;
+}
+
+natsStatus
+sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts,
+                   int64_t timeout, sysPageHandler handler, void *closure,
+                   const sysWalkOps *ops)
+{
+    natsStatus s;
+    int64_t    deadline;
+    int        offset;
+    int        total = 0;
+    bool       stop  = false;
+
+    if ((client == NULL) || (handler == NULL) || (ops == NULL))
+        return NATS_INVALID_ARG;
+
+    s = _checkTimeout(&timeout);
+    if (s != NATS_OK)
+        return s;
+
+    // One budget covers the whole walk, not each page.
+    deadline = _nowMs() + timeout;
+    offset   = (opts != NULL) ? WALK_INT(opts, ops->OffsetOff) : 0;
+
+    // Without a paged result there is nothing to walk: one request, one page,
+    // and nothing left for a false return to stop.
+    if ((ops->IsPaged != NULL) && !ops->IsPaged(opts))
+        return _walkPage(client, serverID, opts, &offset, &total, false, deadline, handler,
+                         closure, ops, &stop);
+
+    // Each page reports the total afresh, so the stop condition is judged on
+    // what the server last said.
+    do
+    {
+        s = _walkPage(client, serverID, opts, &offset, &total, true, deadline, handler,
+                      closure, ops, &stop);
+        if (s != NATS_OK)
+            return s;
+    } while (!stop);
+
+    return NATS_OK;
+}
+
+const char *
+sysclient_walkID(const sysWalk *walk)
+{
+    return (walk != NULL) ? walk->serverID : NULL;
+}
+
+void
+sysclient_walkDestroy(void *walkv, const void *ctx)
+{
+    sysWalk *walk = (sysWalk *) walkv;
+
+    (void) ctx;
+    if (walk == NULL)
+        return;
+
+    sysclient_destroyResp(walk->first, walk->ops->Endpoint);
+    if (walk->opts != NULL)
+        walk->ops->FreeOptions(walk->opts);
+    NATS_FREE(walk->opts);
+    NATS_FREE(walk->serverID);
+    NATS_FREE(walk);
+}
+
+// Builds one walk from the page a ping produced. On NATS_OK the walk has
+// adopted 'page' and the caller must not release it; on any other status
+// ownership stays with the caller.
+static natsStatus
+_newWalk(sysWalk **newWalk, natsSysClient *client, const void *opts, void *page,
+         const sysWalkOps *ops)
+{
+    sysWalk    *walk;
+    const char *id;
+    natsStatus  s;
+
+    *newWalk = NULL;
+
+    walk = (sysWalk *) NATS_CALLOC(1, sizeof(sysWalk));
+    if (walk == NULL)
+        return NATS_NO_MEMORY;
+
+    walk->ops    = ops;
+    walk->client = client;
+
+    // Every page after the first is fetched by server ID, so a reply that did
+    // not name its sender cannot be walked at all. NATS_ERR (a malformed
+    // response) rather than NATS_INVALID_ARG, which is reserved for the
+    // caller's own arguments. A VARZ or HEALTHZ reply without an ID is still
+    // perfectly usable, which is why the check is here and not in the ping.
+    id = RESP_SERVER(page, ops->Endpoint)->ID;
+    s  = nats_IsStringEmpty(id) ? NATS_ERR : sysclient_dupStr(&walk->serverID, id);
+
+    if (s == NATS_OK)
+    {
+        walk->opts = NATS_CALLOC(1, ops->OptsSize);
+        s          = (walk->opts == NULL) ? NATS_NO_MEMORY
+                                          : ops->CopyOptions(walk->opts, opts);
+    }
+    if (s != NATS_OK)
+    {
+        sysclient_walkDestroy(walk, NULL);
+        return s;
+    }
+
+    walk->first  = page;
+    walk->total  = WALK_INT(page, ops->TotalOff);
+    walk->offset = WALK_INT(walk->opts, ops->OffsetOff);
+
+    *newWalk = walk;
+    return NATS_OK;
+}
+
+natsStatus
+sysclient_pingEach(void ***walks, int *count, natsSysClient *client, const void *opts,
+                   int64_t timeout, const sysWalkOps *ops)
+{
+    natsStatus s;
+    void     **pages     = NULL;
+    void     **arr       = NULL;
+    int        pageCount = 0;
+    int        n;
+    int        i;
+
+    if ((walks == NULL) || (count == NULL) || (client == NULL) || (ops == NULL))
+        return NATS_INVALID_ARG;
+
+    *walks = NULL;
+    *count = 0;
+
+    s = sysclient_ping(&pages, &pageCount, client, opts, timeout, ops->Endpoint);
+    if ((s != NATS_OK) || (pageCount == 0))
+        return s;
+
+    n   = pageCount;
+    arr = (void **) NATS_CALLOC((size_t) n, sizeof(void *));
+    if (arr == NULL)
+        s = NATS_NO_MEMORY;
+
+    for (i = 0; (s == NATS_OK) && (i < n); i++)
+    {
+        s = _newWalk((sysWalk **) &arr[i], client, opts, pages[i], ops);
+        // The walk owns the page now; clear the slot so the release below
+        // does not free it a second time.
+        if (s == NATS_OK)
+            pages[i] = NULL;
+    }
+
+    sysclient_freeList(&pages, &pageCount, sysclient_destroyResp, ops->Endpoint);
+
+    if (s != NATS_OK)
+    {
+        // Every slot is a walk or NULL (the failed one, and all after it).
+        sysclient_freeList(&arr, &n, sysclient_walkDestroy, NULL);
+        return s;
+    }
+
+    *walks = arr;
+    *count = n;
+    return NATS_OK;
+}
+
+natsStatus
+sysclient_walkRun(sysWalk *walk, int64_t timeout, sysPageHandler handler, void *closure)
+{
+    natsStatus s;
+    int64_t    deadline;
+    bool       stop = false;
+
+    if ((walk == NULL) || (handler == NULL))
+        return NATS_INVALID_ARG;
+
+    s = _checkTimeout(&timeout);
+    if (s != NATS_OK)
+        return s;
+    if (walk->done)
+        return NATS_OK;
+
+    deadline = _nowMs() + timeout;
+
+    // Deliver the page the ping already fetched before asking for more.
+    if (walk->first != NULL)
+    {
+        const sysWalkOps *ops  = walk->ops;
+        void             *page = walk->first;
+        int               n    = WALK_INT(page, ops->CountOff);
+        bool              wantMore;
+
+        walk->first = NULL;
+        wantMore    = handler(page, closure);
+        sysclient_destroyResp(page, ops->Endpoint);
+
+        walk->offset += n;
+
+        stop = (!wantMore || (n == 0) || (walk->offset >= walk->total)
+                || ((ops->IsPaged != NULL) && !ops->IsPaged(walk->opts)));
+    }
+
+    // The total is the first page's and is never refreshed.
+    while (!stop)
+    {
+        s = _walkPage(walk->client, walk->serverID, walk->opts, &walk->offset, &walk->total,
+                      false, deadline, handler, closure, walk->ops, &stop);
+        if (s != NATS_OK)
+            return s;
+    }
+
+    walk->done = true;
+    return NATS_OK;
 }
 
 static natsStatus
@@ -671,36 +895,6 @@ sysclient_freeJetStreamVarz(void *dst)
 // Option copying.
 //
 
-int64_t
-sysclient_nowMs(void)
-{
-    return nats_NowMonotonicInNanoSeconds() / 1000000;
-}
-
-int64_t
-sysclient_capTimeout(int64_t timeout)
-{
-    return (timeout > SYSCLIENT_MAX_TIMEOUT_MS) ? SYSCLIENT_MAX_TIMEOUT_MS : timeout;
-}
-
-int64_t
-sysclient_deadline(int64_t timeout)
-{
-    return sysclient_nowMs() + sysclient_capTimeout(timeout);
-}
-
-natsStatus
-sysclient_walkServerID(char **dst, const char *id)
-{
-    // Every page after the first is fetched by server ID, so a reply that did
-    // not name its sender cannot be walked at all. NATS_ERR (a malformed
-    // response) rather than NATS_INVALID_ARG, which is reserved for the
-    // caller's own arguments.
-    if (nats_IsStringEmpty(id))
-        return NATS_ERR;
-    return sysclient_dupStr(dst, id);
-}
-
 natsStatus
 sysclient_dupStr(char **dst, const char *src)
 {
@@ -737,6 +931,8 @@ _dupOptStrArray(const char ***dst, int *dstCount, const char *const *src, int co
     if (arr == NULL)
         return NATS_NO_MEMORY;
 
+    // A NULL entry cannot reach here: the walk's ping has already marshalled
+    // these options, and sysclient_optStrArray rejects it there.
     for (i = 0; i < count; i++)
     {
         if (src[i] == NULL)

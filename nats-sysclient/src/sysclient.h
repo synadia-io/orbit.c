@@ -82,7 +82,12 @@ typedef struct __natsSysClientOpts
      */
     int ServerCount;
 
-    /** \brief Stall interval in milliseconds; see #NATS_SYS_DEFAULT_STALL. */
+    /** \brief Stall interval in milliseconds; see #NATS_SYS_DEFAULT_STALL.
+     *
+     * Must be positive: #natsSysClient_Create rejects 0 rather than treating
+     * it as "no stall", since that would make every gather wait out the full
+     * request timeout.
+     */
     int64_t StallInterval;
 
 } natsSysClientOpts;
@@ -132,7 +137,7 @@ typedef struct __natsSysEventFilterOptions
     const char  *Name;      ///< Match one server by name (wire key `server_name`).
     const char  *Cluster;   ///< Match servers in this cluster.
     const char  *Host;      ///< Match servers on this host.
-    const char **Tags;      ///< Match servers carrying all of these tags.
+    const char **Tags;      ///< Match servers carrying all of these tags; no entry may be `NULL`.
     int          TagsCount; ///< Number of entries in #Tags.
     const char  *Domain;    ///< Match servers in this JetStream domain.
 
@@ -291,8 +296,8 @@ natsSysClientOpts_Init(natsSysClientOpts *opts);
  * @param opts the options, or `NULL` for the #natsSysClientOpts_Init defaults.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for `NULL` arguments or for
  * an out-of-range option (a #natsSysClientOpts.ServerCount that is 0 or below
- * -1, or a #natsSysClientOpts.StallInterval below 0), #NATS_NO_MEMORY on
- * allocation failure.
+ * -1, or a #natsSysClientOpts.StallInterval that is 0 or below),
+ * #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Create(natsSysClient **newClient, natsConnection *nc,

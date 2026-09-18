@@ -27,6 +27,13 @@
 struct __natsJSON
 {
     natsJSONType type;
+
+    // The span of input text this value was parsed from; see natsJSON_Raw().
+    // Borrowed from the 'data' passed to natsJSON_Parse(). rawLen sits in the
+    // padding after 'type', so the span costs one pointer per node.
+    int         rawLen;
+    const char *raw;
+
     union
     {
         bool  boolean; // NATS_JSON_BOOL
@@ -592,26 +599,38 @@ _parseObject(_jsonParser *ps, natsJSON **out)
 static natsStatus
 _parseValue(_jsonParser *ps, natsJSON **out)
 {
-    char c;
+    const char *start;
+    natsStatus  s;
+    char        c;
 
     _skipWS(ps);
     if (ps->cur >= ps->end)
         return NATS_ERR;
 
-    c = *ps->cur;
+    start = ps->cur;
+    c     = *start;
     switch (c)
     {
-        case '{': return _parseObject(ps, out);
-        case '[': return _parseArray(ps, out);
-        case '"': return _parseStringNode(ps, out);
+        case '{': s = _parseObject(ps, out); break;
+        case '[': s = _parseArray(ps, out); break;
+        case '"': s = _parseStringNode(ps, out); break;
         case 't':
         case 'f':
-        case 'n': return _parseLiteral(ps, out);
+        case 'n': s = _parseLiteral(ps, out); break;
         default:
-            if ((c == '-') || _isDigit(c))
-                return _parseNumber(ps, out);
-            return NATS_ERR;
+            if (!(c == '-') && !_isDigit(c))
+                return NATS_ERR;
+            s = _parseNumber(ps, out);
+            break;
     }
+    if (s != NATS_OK)
+        return s;
+
+    // Every sub-parser leaves ps->cur just past its value, so the span is
+    // known here without each of them having to record it.
+    (*out)->raw    = start;
+    (*out)->rawLen = (int) (ps->cur - start);
+    return NATS_OK;
 }
 
 natsStatus
@@ -747,6 +766,30 @@ natsJSON_AsStr(const natsJSON *json, const char **out)
 }
 
 natsStatus
+natsJSON_Raw(const natsJSON *json, const char **text, int *len)
+{
+    if ((json == NULL) || (text == NULL) || (len == NULL))
+        return NATS_INVALID_ARG;
+    *text = json->raw;
+    *len  = json->rawLen;
+    return NATS_OK;
+}
+
+// Moves a string node's content out to the caller and turns the node into a
+// JSON null, so the tree stays consistent: a later lookup of the same key sees
+// "present but null", which every getter treats as absent, and
+// natsJSON_Destroy() has nothing left to free.
+static char *
+_takeStrNode(natsJSON *node)
+{
+    char *str = node->v.str;
+
+    node->v.str = NULL;
+    node->type  = NATS_JSON_NULL;
+    return str;
+}
+
+natsStatus
 natsJSON_Field(const natsJSON *json, const char *key, natsJSON **out)
 {
     int i;
@@ -823,6 +866,25 @@ natsJSON_GetStr(const natsJSON *json, const char *key, char **out)
 }
 
 natsStatus
+natsJSON_TakeStr(natsJSON *json, const char *key, char **out)
+{
+    natsJSON  *field = NULL;
+    natsStatus s;
+
+    if (out == NULL)
+        return NATS_INVALID_ARG;
+
+    s = _lookupField(json, key, &field);
+    if (s != NATS_OK)
+        return s;
+    if (field->type != NATS_JSON_STRING)
+        return NATS_INVALID_ARG;
+
+    *out = _takeStrNode(field);
+    return NATS_OK;
+}
+
+natsStatus
 natsJSON_GetBool(const natsJSON *json, const char *key, bool *out)
 {
     natsJSON  *field = NULL;
@@ -886,8 +948,12 @@ natsJSON_GetUInt(const natsJSON *json, const char *key, uint64_t *out)
     return natsJSON_AsUInt(field, out);
 }
 
-natsStatus
-natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *count)
+// The body of natsJSON_GetStrArray and natsJSON_TakeStrArray: looks up the
+// array, checks every element is a string before anything is allocated or
+// moved, then fills the output either with copies or with the tree's own
+// strings.
+static natsStatus
+_strArray(natsJSON *json, const char *key, char ***out, int *count, bool take)
 {
     natsJSON  *field = NULL;
     char     **arr;
@@ -905,7 +971,13 @@ natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *co
         return NATS_INVALID_ARG;
 
     n = field->v.array.count;
-    if (n == 0)
+    for (i = 0; i < n; i++)
+    {
+        if (field->v.array.items[i]->type != NATS_JSON_STRING)
+            return NATS_INVALID_ARG;
+    }
+
+    if (n <= 0)
     {
         *out   = NULL;
         *count = 0;
@@ -919,28 +991,33 @@ natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *co
     for (i = 0; i < n; i++)
     {
         natsJSON *elem = field->v.array.items[i];
-        if (elem->type != NATS_JSON_STRING)
-        {
-            s = NATS_INVALID_ARG;
-            goto fail;
-        }
-        arr[i] = NATS_STRDUP(elem->v.str);
+
+        arr[i] = take ? _takeStrNode(elem) : NATS_STRDUP(elem->v.str);
         if (arr[i] == NULL)
         {
-            s = NATS_NO_MEMORY;
-            goto fail;
+            for (i = 0; i < n; i++)
+                NATS_FREE(arr[i]);
+            NATS_FREE(arr);
+            return NATS_NO_MEMORY;
         }
     }
 
     *out   = arr;
     *count = n;
     return NATS_OK;
+}
 
-fail:
-    for (i = 0; i < n; i++)
-        NATS_FREE(arr[i]);
-    NATS_FREE(arr);
-    return s;
+natsStatus
+natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *count)
+{
+    // The cast is safe: with 'take' false the tree is only read.
+    return _strArray((natsJSON *) json, key, out, count, false);
+}
+
+natsStatus
+natsJSON_TakeStrArray(natsJSON *json, const char *key, char ***out, int *count)
+{
+    return _strArray(json, key, out, count, true);
 }
 
 int
@@ -1134,6 +1211,16 @@ natsJSONWriter_Status(const natsJSONWriter *w)
     return w->st;
 }
 
+natsStatus
+natsJSONWriter_Fail(natsJSONWriter *w, natsStatus st)
+{
+    if (w == NULL)
+        return NATS_INVALID_ARG;
+    if ((w->st == NATS_OK) && (st != NATS_OK))
+        w->st = st;
+    return w->st;
+}
+
 // Emits the separator owed to the enclosing object, then the quoted key and
 // its colon. Callers that follow this with a value must leave needComma set.
 static natsStatus
@@ -1165,21 +1252,52 @@ _writeKey(natsJSONWriter *w, const char *key)
     if ((w)->st != NATS_OK)      \
     return (w)->st
 
-natsStatus
-natsJSONWriter_StartObject(natsJSONWriter *w)
+// Emits the opening brace and enters the new object.
+static natsStatus
+_openObject(natsJSONWriter *w)
 {
-    WRITER_READY(w);
-
-    if (w->needComma)
-        w->st = natsBuf_AppendByte(w->buf, ',');
-    if (w->st == NATS_OK)
-        w->st = natsBuf_AppendByte(w->buf, '{');
+    w->st = natsBuf_AppendByte(w->buf, '{');
     if (w->st == NATS_OK)
     {
         w->depth++;
         w->needComma = false;
     }
     return w->st;
+}
+
+natsStatus
+natsJSONWriter_StartObject(natsJSONWriter *w)
+{
+    WRITER_READY(w);
+
+    // Only the root may be keyless. Inside an object a member needs a key
+    // (natsJSONWriter_StartObjectKey), and after the root has closed there is
+    // nowhere for a second value to go; either would produce text that is not
+    // JSON, so the writer is poisoned instead.
+    if ((w->depth > 0) || w->needComma)
+    {
+        w->st = NATS_ERR;
+        return w->st;
+    }
+
+    return _openObject(w);
+}
+
+natsStatus
+natsJSONWriter_StartObjectKey(natsJSONWriter *w, const char *key)
+{
+    WRITER_READY(w);
+
+    if (w->depth == 0)
+    {
+        // A keyed member has no meaning outside an object.
+        w->st = NATS_ERR;
+        return w->st;
+    }
+    if (_writeKey(w, key) != NATS_OK)
+        return w->st;
+
+    return _openObject(w);
 }
 
 natsStatus

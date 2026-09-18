@@ -48,8 +48,8 @@ typedef struct __natsSysRaftGroupDetail
  * structure. They describe JetStream assets — cluster info, stream config and
  * state, consumers, mirror and sources — and while cnats declares matching
  * types (`jsStreamConfig` and friends) it exposes no public JSON unmarshaller
- * for them, and orbit.c ships no model of its own. Carrying the text loses
- * nothing — numbers round-trip exactly and strings are re-escaped — whereas
+ * for them, and orbit.c ships no model of its own. The text is sliced out of
+ * the reply exactly as the server sent it, so nothing is lost, whereas
  * decoding only the fields we happen to model would silently drop the rest.
  * Feed them to any JSON reader when you need them.
  */

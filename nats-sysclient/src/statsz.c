@@ -30,7 +30,7 @@ static const sysField _dataStatsFields[] = {
 static const sysField _routeStatFields[] = {
     SYS_F(SYS_FLD_U64, natsSysRouteStat, ID, "rid"),
     SYS_F(SYS_FLD_STR, natsSysRouteStat, Name, "name"),
-    SYS_F(SYS_FLD_INT, natsSysRouteStat, Pending, "pending"),
+    SYS_F(SYS_FLD_I64, natsSysRouteStat, Pending, "pending"),
 };
 
 static const sysField _gatewayStatFields[] = {
@@ -133,8 +133,10 @@ _parseServerStats(void *dst, natsJSON *node)
 }
 
 static void
-_freeServerStats(natsSysServerStats *stats)
+_freeServerStats(void *dst)
 {
+    natsSysServerStats *stats = (natsSysServerStats *) dst;
+
     sysclient_freeFields(stats, _serverStatsFields, SYS_NFIELDS(_serverStatsFields));
     sysclient_freePtrArray((void ***) &stats->Routes, &stats->RoutesCount, _freeRouteStat);
     sysclient_freePtrArray((void ***) &stats->Gateways, &stats->GatewaysCount,
@@ -142,45 +144,16 @@ _freeServerStats(natsSysServerStats *stats)
     sysclient_freeObjectPtr((void **) &stats->JetStream, sysclient_freeJetStreamVarz);
 }
 
-static natsStatus
-_respFromMsg(void **newResp, natsMsg *msg)
-{
-    natsSysStatszResp *resp;
-    natsStatus         s;
-
-    *newResp = NULL;
-
-    resp = (natsSysStatszResp *) NATS_CALLOC(1, sizeof(natsSysStatszResp));
-    if (resp == NULL)
-        return NATS_NO_MEMORY;
-
-    // STATSZ is the one endpoint whose payload key is not "data".
-    s = sysclient_decodeResp(msg, &resp->Server, &resp->Error, &resp->Statsz,
-                             "statsz", _parseServerStats);
-    if (s != NATS_OK)
-    {
-        natsSysStatszResp_Destroy(resp);
-        return s;
-    }
-
-    *newResp = resp;
-    return NATS_OK;
-}
-
-static void
-_destroyResp(void *resp)
-{
-    natsSysStatszResp_Destroy((natsSysStatszResp *) resp);
-}
+// STATSZ is the one endpoint whose payload key is not "data".
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysStatszResp, Statsz, SYS_SUBJ_STATSZ, "statsz", 64,
+                                                  _marshalOptions, _parseServerStats, _freeServerStats);
 
 natsStatus
 natsSysClient_Statsz(natsSysStatszResp **newResp, natsSysClient *client,
                      const char *serverID, const natsSysStatszOptions *opts,
                      int64_t timeout)
 {
-    return sysclient_request((void **) newResp, client, serverID, SYS_SUBJ_STATSZ,
-                             _marshalOptions, opts, 64, timeout,
-                             _respFromMsg);
+    return sysclient_request((void **) newResp, client, serverID, opts, timeout, &_endpoint);
 }
 
 natsStatus
@@ -190,21 +163,14 @@ natsSysClient_StatszPing(natsSysStatszRespList *list, natsSysClient *client,
     if (list == NULL)
         return NATS_INVALID_ARG;
 
-    return sysclient_ping((void ***) &list->Resps, &list->Count, client, SYS_SUBJ_STATSZ,
-                          _marshalOptions, opts, 64, timeout, _respFromMsg,
-                          _destroyResp);
+    return sysclient_ping((void ***) &list->Resps, &list->Count, client, opts, timeout,
+                          &_endpoint);
 }
 
 void
 natsSysStatszResp_Destroy(natsSysStatszResp *resp)
 {
-    if (resp == NULL)
-        return;
-
-    sysclient_freeServerInfo(&resp->Server);
-    sysclient_freeAPIError(&resp->Error);
-    _freeServerStats(&resp->Statsz);
-    NATS_FREE(resp);
+    sysclient_destroyResp(resp, &_endpoint);
 }
 
 void
@@ -213,5 +179,6 @@ natsSysStatszRespList_Destroy(natsSysStatszRespList *list)
     if (list == NULL)
         return;
 
-    sysclient_freeRespList((void ***) &list->Resps, &list->Count, _destroyResp);
+    sysclient_freeList((void ***) &list->Resps, &list->Count, sysclient_destroyResp,
+                       &_endpoint);
 }
