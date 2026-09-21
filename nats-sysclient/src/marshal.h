@@ -13,18 +13,11 @@
 
 // Internal to nats-sysclient. Not installed.
 //
-// Request options are marshalled with utils' natsJSONWriter. The helpers here
-// omit a field whose value is empty ("" / NULL / false / 0 / an empty array)
-// rather than emitting it.
-//
-// Which helper a field uses is the whole encoding contract, so it is worth
-// being deliberate: four of the six option structs omit their unset fields and
-// use sysclient_opt*(); CONNZ always sends every one of its own fields and so
-// uses the plain natsJSONWriter_Add*() calls, emitting `"sort":""` and
-// `"state":0` on an otherwise empty request; SUBSZ is mixed, always sending
-// offset, limit and subscriptions but omitting account and test. That
-// difference is visible to the
-// server, so it is preserved rather than tidied away.
+// Request options are marshalled with utils' natsJSONWriter. The sysclient_opt*
+// helpers omit a field whose value is empty; CONNZ sends every one of its own
+// fields and SUBSZ sends offset, limit and subscriptions unconditionally, so
+// those use the plain natsJSONWriter_Add* calls. The difference is
+// server-visible.
 
 #ifndef NATS_SYSCLIENT_MARSHAL_H_
 #define NATS_SYSCLIENT_MARSHAL_H_
@@ -46,18 +39,15 @@ sysclient_optBool(natsJSONWriter *w, const char *key, bool val);
 natsStatus
 sysclient_optInt(natsJSONWriter *w, const char *key, int64_t val);
 
-// Rejects a NULL entry with NATS_INVALID_ARG, poisoning the writer.
+// A NULL entry poisons the writer with NATS_INVALID_ARG.
 natsStatus
 sysclient_optStrArray(natsJSONWriter *w, const char *key, const char *const *vals, int count);
 
-// Appends the server-filter members to the object already open on 'w'.
-//
-// The filter keys are flattened into the request object rather than nested.
-// Passing NULL appends nothing.
+// Appends the server-filter keys, flattened, to the open object on 'w'.
 natsStatus
 sysclient_writeEventFilter(natsJSONWriter *w, const natsSysEventFilterOptions *filter);
 
-// Marshals a whole request whose only content is the server filter.
+// Marshals a request whose only content is the server filter.
 natsStatus
 sysclient_marshalFilterOnly(natsBuffer *buf, const natsSysEventFilterOptions *filter);
 

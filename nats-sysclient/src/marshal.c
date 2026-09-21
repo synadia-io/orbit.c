@@ -47,10 +47,7 @@ sysclient_optStrArray(natsJSONWriter *w, const char *key, const char *const *val
     if ((vals == NULL) || (count <= 0))
         return natsJSONWriter_Status(w);
 
-    // A NULL entry is a caller bug (a partly filled array, say), not an empty
-    // value: the writer would emit "" for it, which no server matches, and
-    // the request would silently select nothing. Poison the writer so the
-    // call fails with NATS_INVALID_ARG before anything is sent.
+    // The writer would emit "" for a NULL entry, which no server matches.
     for (i = 0; i < count; i++)
     {
         if (vals[i] == NULL)

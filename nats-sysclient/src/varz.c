@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// One table row per wire field, so the whole set can be read off against the
-// wire format rather than by following the parsing logic in this file.
 
 #include "varz.h"
 
@@ -181,8 +179,6 @@ natsSysVarzOptions_Init(natsSysVarzOptions *opts)
     return sysclient_initOpts(opts, sizeof(*opts));
 }
 
-// VARZ has no options of its own, so the request is the five optional server
-// filter keys and nothing else.
 static natsStatus
 _marshalOptions(natsBuffer *buf, const void *optsv)
 {
@@ -354,8 +350,8 @@ _freeHTTPReqStats(natsSysVarz *varz)
                              sizeof(natsSysHTTPReqStat), _freeHTTPReqStat);
 }
 
-// `http_req_stats` is a JSON object keyed by path. C has no map, so its
-// members are walked in document order into a parallel array.
+// `http_req_stats` is an object keyed by path, carried as an array in
+// document order.
 static natsStatus
 _parseHTTPReqStats(natsSysVarz *varz, natsJSON *node)
 {

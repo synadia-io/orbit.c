@@ -26,212 +26,143 @@ extern "C" {
 
 /** \defgroup natsSysSubszGroup SUBSZ
  *
- * Server subscription state, from the `$SYS.REQ.SERVER.<id>.SUBSZ` endpoint.
+ * Server subscriptions, from `$SYS.REQ.SERVER.<id>.SUBSZ`. The result is
+ * paginated; #natsSysClient_SubszEach walks every page. SUBSZ has no server
+ * filter, so a ping cannot select servers.
  *
- * This endpoint paginates; use #natsSysClient_SubszEach to walk every page.
- *
- * \note SUBSZ is the one endpoint whose options carry no server filter, so
- * a ping cannot select servers by name, cluster, host, tags or domain. The
- * server itself would accept one; the options here do not model it.
- *
- * \warning Paging this endpoint can miss subscriptions and repeat others.
- * nats-server pages by offset over a sublist with no stable ordering
- * (nats-server#7009), so successive pages are not successive slices of one
- * consistent list, even though the per-page counts and #natsSysSubsz.Total
- * remain consistent. The page loop here is correct; the pages are not. When
- * you need a complete list, request a #natsSysSubszOptions.Limit large enough
- * to cover #natsSysSubsz.Total and take the single page.
+ * \warning nats-server pages by offset over a sublist with no stable order
+ * (nats-server#7009), so a walk can miss subscriptions and repeat others.
+ * For a complete list, request a #natsSysSubszOptions.Limit that covers
+ * #natsSysSubsz.Total and take the single page.
  * @{
  */
 
-/** \brief Sublist statistics for a server.
- *
- * In the payload these keys sit alongside the SUBSZ fields rather than in a
- * nested object. The whole struct is `NULL` when the server sent none of them.
- */
+/** \brief Sublist statistics. */
 typedef struct __natsSysSublistStats
 {
-    uint32_t NumSubs;      ///< Subscriptions in the sublist.
-    uint32_t NumCache;     ///< Entries in the matching cache.
-    uint64_t NumInserts;   ///< Subscriptions ever inserted.
-    uint64_t NumRemoves;   ///< Subscriptions ever removed.
-    uint64_t NumMatches;   ///< Match operations performed.
-    double   CacheHitRate; ///< Fraction of matches served from cache.
-    uint32_t MaxFanout;    ///< Largest fanout seen.
-    double   AvgFanout;    ///< Average fanout.
+    uint32_t NumSubs;      ///< Wire key `num_subscriptions`.
+    uint32_t NumCache;
+    uint64_t NumInserts;
+    uint64_t NumRemoves;
+    uint64_t NumMatches;
+    double   CacheHitRate;
+    uint32_t MaxFanout;
+    double   AvgFanout;
 
 } natsSysSublistStats;
 
-/** \brief One page of server subscription state. */
+/** \brief One page of subscriptions. */
 typedef struct __natsSysSubsz
 {
-    char *ID;  ///< Reporting server's ID (wire key `server_id`).
-    char *Now; ///< Time the page was produced, RFC 3339.
+    char *ID;  ///< Wire key `server_id`.
+    char *Now; ///< RFC 3339.
 
-    /** \brief Sublist statistics, or `NULL` when the server sent none.
-     *
-     * These keys are flattened into the enclosing object rather than nested,
-     * so the pointer is allocated only when at least one of them is present.
-     */
-    natsSysSublistStats *SublistStats;
+    natsSysSublistStats *SublistStats; ///< `NULL` when the server sent none.
 
-    int Total;  ///< Subscriptions matching the request across all pages.
-    int Offset; ///< Offset this page starts at.
-    int Limit;  ///< Page size the server applied.
+    int Total;  ///< Matching subscriptions across all pages.
+    int Offset;
+    int Limit;
 
-    natsSysSubDetail *Subs;      ///< Subscriptions in this page.
-    int               SubsCount; ///< Number of entries in #Subs.
+    natsSysSubDetail *Subs; ///< Wire key `subscriptions_list`.
+    int               SubsCount;
 
 } natsSysSubsz;
 
-/** \brief A SUBSZ response from one server.
- *
- * \warning #Error is decoded but never acted on. Check `Error.Code != 0`
- * before trusting #Subsz.
- */
+/** \brief A SUBSZ response. Check `Error.Code` before reading #Subsz. */
 typedef struct __natsSysSubszResp
 {
-    natsSysServerInfo Server; ///< Which server answered.
-    natsSysSubsz      Subsz;  ///< The payload (wire key `data`).
-    natsSysAPIError   Error;  ///< Server-reported error, if any.
+    natsSysServerInfo Server;
+    natsSysSubsz      Subsz; ///< Wire key `data`.
+    natsSysAPIError   Error;
 
 } natsSysSubszResp;
 
-/** \brief The responses gathered by #natsSysClient_SubszPing. */
+/** \brief Responses gathered by #natsSysClient_SubszPing; see
+ * #natsSysHealthzRespList. */
 typedef struct __natsSysSubszRespList
 {
-    natsSysSubszResp **Resps; ///< One response per server that answered.
-    int                Count; ///< Number of entries in #Resps.
+    natsSysSubszResp **Resps;
+    int                Count;
 
 } natsSysSubszRespList;
 
-/** \brief Options for a SUBSZ request.
+/** \brief SUBSZ request options.
  *
- * \note SUBSZ is the mixed case: #Offset, #Limit and #Subscriptions are always
- * sent, so a zeroed options struct marshals to
- * `{"offset":0,"limit":0,"subscriptions":false}`, while #Account and #Test are
- * omitted when empty.
+ * #Offset, #Limit and #Subscriptions are always sent; #Account and #Test
+ * are left out when empty.
  */
 typedef struct __natsSysSubszOptions
 {
-    int  Offset;        ///< First subscription to return.
-    int  Limit;         ///< Maximum subscriptions per page.
-    bool Subscriptions; ///< Include #natsSysSubsz.Subs.
-    const char *Account; ///< Return only this account's subscriptions.
-
-    /** \brief Return only subscriptions that would match this subject.
-     *
-     * Must be a literal publish subject, not a wildcard pattern.
-     */
-    const char *Test;
+    int         Offset;
+    int         Limit;
+    bool        Subscriptions; ///< Include #natsSysSubsz.Subs.
+    const char *Account;
+    const char *Test;          ///< Return only subscriptions matching this literal subject.
 
 } natsSysSubszOptions;
 
-/** \brief Invoked once per page of a SUBSZ walk.
- *
- * @param page borrowed, and destroyed by the library as soon as the handler
- * returns. Copy anything you need to keep.
- * @param closure the opaque pointer passed to the walk.
- * @return `true` to fetch the next page, `false` to stop the walk.
- */
+/** \brief Called once per page of a walk; see #natsSysConnzPageHandler. */
 typedef bool (*natsSysSubszPageHandler)(const natsSysSubszResp *page, void *closure);
 
-/** \brief An independent, resumable pagination over one server. */
+/** \brief A resumable pagination over one server. */
 typedef struct __natsSysSubszWalk natsSysSubszWalk;
 
 /** \brief One walk per server that answered a ping. */
 typedef struct __natsSysSubszWalkList
 {
-    natsSysSubszWalk **Walks; ///< One walk per responding server.
-    int                Count; ///< Number of entries in #Walks.
+    natsSysSubszWalk **Walks;
+    int                Count;
 
 } natsSysSubszWalkList;
 
-/** \brief Initialises a #natsSysSubszOptions to its defaults (all unset). */
+/** \brief Initializes options to their defaults (all unset). */
 NATS_EXTERN natsStatus
 natsSysSubszOptions_Init(natsSysSubszOptions *opts);
 
-/** \brief Requests one page of subscriptions from one server.
- *
- * @param newResp out-param set to the response; destroy with
- * #natsSysSubszResp_Destroy. Set to `NULL` on error.
- * @param client the system client.
- * @param serverID the target server's ID. Cannot be `NULL` or empty.
- * @param opts the request options, or `NULL` for the defaults.
- * @param timeout milliseconds to wait, or 0 for
- * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
- * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
- * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response,
- * #NATS_NO_MEMORY on allocation failure.
- */
+/** \brief Requests one page of subscriptions from one server; see
+ * #natsSysClient_Healthz. */
 NATS_EXTERN natsStatus
 natsSysClient_Subsz(natsSysSubszResp **newResp, natsSysClient *client,
                     const char *serverID, const natsSysSubszOptions *opts,
                     int64_t timeout);
 
-/** \brief Requests one page of subscriptions from every server in the cluster.
- *
- * \note As with every `*Ping` call, running out of time is normal termination.
- * See #natsSysClient_HealthzPing.
- */
+/** \brief Requests one page of subscriptions from every server; see
+ * #natsSysClient_HealthzPing. */
 NATS_EXTERN natsStatus
 natsSysClient_SubszPing(natsSysSubszRespList *list, natsSysClient *client,
                         const natsSysSubszOptions *opts, int64_t timeout);
 
-/** \brief Walks every page of subscriptions on one server.
- *
- * `timeout` is the budget for the whole walk. See #natsSysClient_ConnzEach for
- * the full description; the semantics are identical.
- */
+/** \brief Walks every page of subscriptions on one server; see
+ * #natsSysClient_ConnzEach. */
 NATS_EXTERN natsStatus
 natsSysClient_SubszEach(natsSysClient *client, const char *serverID,
                         const natsSysSubszOptions *opts, int64_t timeout,
                         natsSysSubszPageHandler handler, void *closure);
 
-/** \brief Pings every server, then hands back one independent walk each.
- *
- * See #natsSysClient_ConnzPingEach; the semantics are identical.
- */
+/** \brief Pings every server and returns one walk per reply; see
+ * #natsSysClient_ConnzPingEach. */
 NATS_EXTERN natsStatus
 natsSysClient_SubszPingEach(natsSysSubszWalkList *list, natsSysClient *client,
                             const natsSysSubszOptions *opts, int64_t timeout);
 
-/** \brief Returns the ID of the server a walk covers; borrowed.
- *
- * Never `NULL` for a walk handed back by #natsSysClient_SubszPingEach — a
- * reply that did not name its sender is rejected there rather than turned
- * into a walk. Returns `NULL` only if `walk` itself is `NULL`.
- */
+/** \brief Returns the ID of the server a walk covers. */
 NATS_EXTERN const char *
 natsSysSubszWalk_ServerID(const natsSysSubszWalk *walk);
 
-/** \brief Drives one walk to completion.
- *
- * See #natsSysConnzWalk_Run; the semantics are identical.
- */
+/** \brief Runs a walk to completion; see #natsSysConnzWalk_Run. */
 NATS_EXTERN natsStatus
 natsSysSubszWalk_Run(natsSysSubszWalk *walk, int64_t timeout,
                      natsSysSubszPageHandler handler, void *closure);
 
-/** \brief Releases the contents of a #natsSysSubszWalkList.
- *
- * Passing `NULL` is a no-op. The list object itself is not freed.
- */
+/** \brief Destroys the contents of a walk list, not the list itself. */
 NATS_EXTERN void
 natsSysSubszWalkList_Destroy(natsSysSubszWalkList *list);
 
-/** \brief Destroys a response returned by #natsSysClient_Subsz.
- *
- * Passing `NULL` is a no-op.
- */
+/** \brief Destroys a response; `NULL` is a no-op. */
 NATS_EXTERN void
 natsSysSubszResp_Destroy(natsSysSubszResp *resp);
 
-/** \brief Releases the contents of a #natsSysSubszRespList.
- *
- * Passing `NULL` is a no-op. The list object itself is not freed.
- */
+/** \brief Destroys the contents of a list, not the list itself. */
 NATS_EXTERN void
 natsSysSubszRespList_Destroy(natsSysSubszRespList *list);
 

@@ -65,9 +65,6 @@ natsSysClient_Create(natsSysClient **newClient, natsConnection *nc,
     if (newClient == NULL)
         return NATS_INVALID_ARG;
 
-    // Cleared before anything else is judged: the headers promise the out-param
-    // is NULL on *every* error, and a caller that destroys it unconditionally
-    // would otherwise free an indeterminate pointer.
     *newClient = NULL;
 
     if (nc == NULL)
@@ -79,12 +76,9 @@ natsSysClient_Create(natsSysClient **newClient, natsConnection *nc,
         opts = &defaults;
     }
 
-    // -1 is the "unset" sentinel, so it is allowed alongside any positive
-    // count.
+    // -1 means "no limit".
     if ((opts->ServerCount < -1) || (opts->ServerCount == 0))
         return NATS_INVALID_ARG;
-    // Rejected rather than treated as "no stall": silently disabling the stall
-    // would make every gather wait out the full request timeout.
     if (opts->StallInterval <= 0)
         return NATS_INVALID_ARG;
 
@@ -103,21 +97,13 @@ natsSysClient_Create(natsSysClient **newClient, natsConnection *nc,
 void
 natsSysClient_Destroy(natsSysClient *client)
 {
-    // The connection is borrowed; leave it alone.
     NATS_FREE(client);
 }
 
-// The longest timeout honoured, in milliseconds. Seven days is far beyond any
-// real monitoring request, and bounding it keeps every millisecond value this
-// library hands downwards small enough to survive being turned into a deadline:
-// both cnats and nats-extra compute `now + timeout` into an int64, which
-// overflows for values near INT64_MAX.
+// Timeouts are capped so that now + timeout cannot overflow an int64.
 #define MAX_TIMEOUT_MS ((int64_t) 7 * 24 * 60 * 60 * 1000)
 
-// The one timeout policy every public entry point applies: a negative value
-// is the caller's error, 0 selects NATS_SYS_DEFAULT_REQUEST_TIMEOUT, and the
-// result is capped so that INT64_MAX means "no practical limit" everywhere
-// rather than only inside a page loop.
+// Negative is an error, 0 selects the default, and the result is capped.
 static natsStatus
 _checkTimeout(int64_t *timeout)
 {
@@ -130,7 +116,6 @@ _checkTimeout(int64_t *timeout)
     return NATS_OK;
 }
 
-// NULL-safe strdup into an out-param.
 static natsStatus
 _dupStr(char **dst, const char *src)
 {
@@ -144,7 +129,6 @@ _dupStr(char **dst, const char *src)
     return (*dst == NULL) ? NATS_NO_MEMORY : NATS_OK;
 }
 
-// Formats one of the SYS_SUBJ_* templates with a server ID or "PING".
 static natsStatus
 _buildSubject(char **out, const char *fmt, const char *target)
 {
@@ -164,7 +148,6 @@ _buildSubject(char **out, const char *fmt, const char *target)
     return NATS_OK;
 }
 
-// Sends a marshalled request to one server and waits for its reply.
 static natsStatus
 _requestByID(natsMsg **replyMsg, natsSysClient *client, const char *serverID,
              const char *subjFmt, const char *payload, int payloadLen, int64_t timeout)
@@ -186,9 +169,8 @@ _requestByID(natsMsg **replyMsg, natsSysClient *client, const char *serverID,
 
     s = natsConnection_Request(replyMsg, client->nc, subj, payload, payloadLen, timeout);
 
-    // The server ID is part of the subject, so "nobody answered" means "no
-    // such server". Note this is also what you get when the connection is not
-    // on the system account at all; the two are indistinguishable.
+    // The server ID is in the subject, so no responder means no such server
+    // (or a connection that is not on the system account).
     if (s == NATS_NO_RESPONDERS)
         s = NATS_NOT_FOUND;
 
@@ -196,9 +178,7 @@ _requestByID(natsMsg **replyMsg, natsSysClient *client, const char *serverID,
     return s;
 }
 
-// Scatters a marshalled request to every server and gathers the raw replies.
-// Always destroy *list with natsMsgList_Destroy unless the return was
-// NATS_INVALID_ARG.
+// Scatters a request to every server and gathers the raw replies.
 static natsStatus
 _pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
              const char *payload, int payloadLen, int64_t timeout)
@@ -221,16 +201,9 @@ _pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
 
     s = natsRequestMany_Request(list, client->nc, subj, payload, payloadLen, &rmOpts);
 
-    // Reaching the deadline is how a scatter-gather normally ends: there is no
-    // way to know how many servers should answer, so the gather returns
-    // whatever arrived, which may be nothing at all. A gather that times out
-    // empty is therefore a success with Count == 0.
-    //
-    // NATS_NO_RESPONDERS is deliberately NOT folded in here. It means nobody is
-    // subscribed to the subject at all — typically the connection is not on the
-    // system account — which is a real failure rather than an empty result.
-    // Unlike the by-ID path there is no server ID to blame, so the status is
-    // passed through as-is instead of being flattened to NATS_NOT_FOUND.
+    // Reaching the deadline is how a gather normally ends, so it is a success
+    // with whatever arrived. NATS_NO_RESPONDERS (nobody subscribed at all,
+    // typically a connection off the system account) stays an error.
     if (s == NATS_TIMEOUT)
         s = NATS_OK;
 
@@ -238,13 +211,10 @@ _pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
     return s;
 }
 
-// The three envelope members of a response, located through its descriptor.
 #define RESP_SERVER(r, ep)  ((natsSysServerInfo *) ((char *) (r) + (ep)->ServerOff))
 #define RESP_ERROR(r, ep)   ((natsSysAPIError *) ((char *) (r) + (ep)->ErrorOff))
 #define RESP_PAYLOAD(r, ep) ((void *) ((char *) (r) + (ep)->PayloadOff))
 
-// Initial request buffer size; every request is a small flat object, and the
-// buffer grows on its own for the rare one that is not.
 #define REQ_BUF_HINT (256)
 
 static natsStatus
@@ -259,9 +229,8 @@ _parseAPIError(void *dst, natsJSON *node)
     return sysclient_scanFields(dst, node, _apiErrorFields, SYS_NFIELDS(_apiErrorFields));
 }
 
-// Splits a response envelope into its parts. *payload borrows a node owned by
-// 'root' and is set to NULL when the key is absent; 'server' and 'apiErr' are
-// filled in place.
+// Splits a response envelope; *payload borrows from 'root' and is NULL when
+// the key is absent.
 static natsStatus
 _parseEnvelope(natsSysServerInfo *server, natsSysAPIError *apiErr, natsJSON **payload,
                natsJSON *root, const char *payloadKey)
@@ -274,17 +243,14 @@ _parseEnvelope(natsSysServerInfo *server, natsSysAPIError *apiErr, natsJSON **pa
     if (natsJSON_Type(root) != NATS_JSON_OBJECT)
         return NATS_INVALID_ARG;
 
-    // Absent or null leaves the zero value; a present non-object is malformed.
-    // Letting a bad "error" through would hand the caller a zeroed Error
-    // alongside NATS_OK, and the documented "check Error.Code != 0" would then
-    // clear a response the server had in fact rejected.
+    // A present non-object "error" is malformed: letting it through would
+    // hand the caller a zeroed Error for a response the server rejected.
     s = sysclient_objectInline(server, root, "server", _parseServerInfo);
     IFOK(s, sysclient_objectInline(apiErr, root, "error", _parseAPIError));
     if (s != NATS_OK)
         return s;
 
-    // The payload is absent when the server reports an error, so a missing key
-    // is not a failure — the caller is expected to check apiErr.
+    // The payload is absent when the server reports an error.
     s = natsJSON_Lookup(root, payloadKey, &node);
     if (s == NATS_NOT_FOUND)
         return NATS_OK;
@@ -309,12 +275,9 @@ sysclient_destroyResp(void *resp, const void *epv)
     NATS_FREE(resp);
 }
 
-// Maps an accessor-level failure onto the status the public API documents.
-//
-// A payload that is not an object, or a key holding a value of the wrong type,
-// surfaces as NATS_INVALID_ARG from the json.h accessors. Report that as
-// NATS_ERR (malformed response); NATS_INVALID_ARG stays reserved for a bad
-// argument to the natsSysClient_* call itself.
+// The json.h accessors report a wrong type as NATS_INVALID_ARG; to the caller
+// that is a malformed response, and NATS_INVALID_ARG is reserved for their own
+// arguments.
 static natsStatus
 _responseStatus(natsStatus s)
 {
@@ -323,8 +286,7 @@ _responseStatus(natsStatus s)
     return s;
 }
 
-// Decodes one reply into a freshly allocated, fully-owned response; *newResp
-// is NULL on error. The status is already mapped through _responseStatus().
+// Decodes one reply into a new response; *newResp is NULL on error.
 static natsStatus
 _respFromMsg(void **newResp, natsMsg *msg, const sysEndpoint *ep)
 {
@@ -343,13 +305,10 @@ _respFromMsg(void **newResp, natsMsg *msg, const sysEndpoint *ep)
     IFOK(s, _parseEnvelope(RESP_SERVER(resp, ep), RESP_ERROR(resp, ep), &payload, root,
                            ep->PayloadKey));
 
-    // A server reporting an error sends no payload, so an absent key is not a
-    // failure; the caller checks the Error member.
     if ((s == NATS_OK) && (payload != NULL))
         s = ep->ParsePayload(RESP_PAYLOAD(resp, ep), payload);
 
-    // The tree borrows the message text for its raw spans (natsJSON_Raw), so
-    // it goes first and the caller's message stays alive until after this.
+    // The tree's raw spans borrow from the message, which the caller still holds.
     natsJSON_Destroy(root);
 
     s = _responseStatus(s);
@@ -430,8 +389,6 @@ sysclient_ping(void ***resps, int *count, natsSysClient *client, const void *opt
 
     natsMsgList_Destroy(&msgs);
 
-    // One bad response discards the whole batch rather than yielding a
-    // partial one.
     if (s != NATS_OK)
     {
         sysclient_freeList(&arr, &n, sysclient_destroyResp, ep);
@@ -469,8 +426,6 @@ sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *
 #define WALK_INT(base, off) (*(int *) ((char *) (base) + (off)))
 #define WALK_BOOL(base, off) (*(bool *) ((char *) (base) + (off)))
 
-// Whether the options ask for a paged result at all. 'opts' may be NULL,
-// meaning defaults, which never ask for one.
 static bool
 _isPaged(const sysWalkOps *ops, const void *opts)
 {
@@ -479,15 +434,10 @@ _isPaged(const sysWalkOps *ops, const void *opts)
     return (opts != NULL) && WALK_BOOL(opts, ops->PagedOff);
 }
 
-// Hands one page to the handler, releases it, and advances *offset past it.
-// With 'refresh' set, *total is re-read from the page; otherwise the caller's
-// value stands. 'stop' is set when there is nothing more to fetch: the handler
-// declined more, the page was empty, the reported total has been covered, or
-// the result is not paged at all.
-//
-// Stopping on an empty page is what keeps a shrinking result set from looping
-// forever; it is a deliberate deviation from orbit.go, whose per-server ping
-// iterators lack it.
+// Hands one page to the handler, releases it, and advances *offset. With
+// 'refresh', *total is re-read from the page. Stopping on an empty page keeps
+// a shrinking result set from looping forever; orbit.go's per-server ping
+// iterators lack that guard.
 static void
 _deliverPage(void *page, int *offset, int *total, bool refresh, bool paged,
              sysPageHandler handler, void *closure, const sysWalkOps *ops, bool *stop)
@@ -504,8 +454,7 @@ _deliverPage(void *page, int *offset, int *total, bool refresh, bool paged,
     *stop = (!wantMore || !paged || (n == 0) || (*offset >= *total));
 }
 
-// Fetches one page by ID and delivers it. A server that left the cluster
-// meanwhile yields NATS_NOT_FOUND.
+// Fetches one page by ID and delivers it.
 static natsStatus
 _walkPage(natsSysClient *client, const char *serverID, const void *opts, int *offset,
           int *total, bool refresh, bool paged, int64_t deadline, sysPageHandler handler,
@@ -546,13 +495,10 @@ sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts
     if (s != NATS_OK)
         return s;
 
-    // One budget covers the whole walk, not each page.
     deadline = natsSys_NowMs() + timeout;
     offset   = (opts != NULL) ? WALK_INT(opts, ops->OffsetOff) : 0;
     paged    = _isPaged(ops, opts);
 
-    // Each page reports the total afresh, so the stop condition is judged on
-    // what the server last said.
     do
     {
         s = _walkPage(client, serverID, opts, &offset, &total, true, paged, deadline,
@@ -587,9 +533,7 @@ sysclient_walkDestroy(void *walkv, const void *ctx)
     NATS_FREE(walk);
 }
 
-// Builds one walk from the page a ping produced. On NATS_OK the walk has
-// adopted 'page' and the caller must not release it; on any other status
-// ownership stays with the caller.
+// Builds a walk from a ping's page, which it adopts on NATS_OK.
 static natsStatus
 _newWalk(sysWalk **newWalk, natsSysClient *client, const void *opts, void *page,
          const sysWalkOps *ops)
@@ -607,11 +551,8 @@ _newWalk(sysWalk **newWalk, natsSysClient *client, const void *opts, void *page,
     walk->ops    = ops;
     walk->client = client;
 
-    // Every page after the first is fetched by server ID, so a reply that did
-    // not name its sender cannot be walked at all. NATS_ERR (a malformed
-    // response) rather than NATS_INVALID_ARG, which is reserved for the
-    // caller's own arguments. A VARZ or HEALTHZ reply without an ID is still
-    // perfectly usable, which is why the check is here and not in the ping.
+    // Every later page is fetched by server ID, so a reply without one cannot
+    // be walked.
     id = RESP_SERVER(page, ops->Endpoint)->ID;
     s  = nats_IsStringEmpty(id) ? NATS_ERR : _dupStr(&walk->serverID, id);
 
@@ -704,8 +645,7 @@ sysclient_walkRun(sysWalk *walk, int64_t timeout, sysPageHandler handler, void *
     deadline = natsSys_NowMs() + timeout;
     paged    = _isPaged(walk->ops, walk->opts);
 
-    // Deliver the page the ping already fetched before asking for more. The
-    // total is the first page's and is never refreshed.
+    // The ping's page first; its total is never refreshed.
     if (walk->first != NULL)
     {
         void *page = walk->first;
@@ -727,9 +667,7 @@ sysclient_walkRun(sysWalk *walk, int64_t timeout, sysPageHandler handler, void *
     return NATS_OK;
 }
 
-//
 // Shared types declared in sysclient.h.
-//
 
 static const sysField _slowConsumersStatsFields[] = {
     SYS_F(SYS_FLD_U64, natsSysSlowConsumersStats, Clients, "clients"),
@@ -907,11 +845,8 @@ sysclient_freeJetStreamVarz(void *dst)
     sysclient_freeObjectPtr((void **) &jsv->Meta, sysclient_freeMetaClusterInfo);
 }
 
-//
 // Option copying.
-//
 
-// Local to the event filter, the only option member that is a string array.
 static natsStatus
 _dupOptStrArray(const char ***dst, int *dstCount, const char *const *src, int count)
 {
@@ -931,8 +866,7 @@ _dupOptStrArray(const char ***dst, int *dstCount, const char *const *src, int co
     if (arr == NULL)
         return NATS_NO_MEMORY;
 
-    // A NULL entry cannot reach here: the walk's ping has already marshalled
-    // these options, and sysclient_optStrArray rejects it there.
+    // A NULL entry was already rejected when the ping marshalled these.
     for (i = 0; i < count; i++)
     {
         arr[i] = NATS_STRDUP(src[i]);
@@ -1004,9 +938,7 @@ sysclient_freeEventFilter(natsSysEventFilterOptions *filter)
     memset(filter, 0, sizeof(*filter));
 }
 
-//
 // RFC 3339 parsing.
-//
 
 static bool
 _readDigits(const char **p, int n, int *out)
@@ -1035,8 +967,7 @@ _daysInMonth(int y, int m)
     return dm[m - 1];
 }
 
-// Days from 1970-01-01 to y-m-d, proleptic Gregorian. Pure arithmetic, so no
-// OS date facility (and therefore no os_shims entry) is needed.
+// Days from 1970-01-01 to y-m-d, proleptic Gregorian.
 static int64_t
 _daysFromCivil(int64_t y, int m, int d)
 {
@@ -1129,8 +1060,7 @@ natsSysTime_Parse(int64_t *unixNanos, const char *rfc3339)
     if (*p != '\0')
         return NATS_INVALID_ARG;
 
-    // A leap second (60) is legal in RFC 3339 and is folded into the next
-    // minute, as most implementations do.
+    // A leap second (60) folds into the next minute.
     if ((mon < 1) || (mon > 12) || (hour > 23) || (min > 59) || (sec > 60))
         return NATS_INVALID_ARG;
     if ((day < 1) || (day > _daysInMonth(year, mon)))
@@ -1139,11 +1069,8 @@ natsSysTime_Parse(int64_t *unixNanos, const char *rfc3339)
     days = _daysFromCivil(year, mon, day);
     secs = days * 86400 + hour * 3600 + min * 60 + sec - offsetSec;
 
-    // Reject what int64 nanoseconds cannot hold, rather than overflowing into a
-    // plausible-looking wrong answer. The boundary is real: a JetStream stream
-    // that has never been written reports "0001-01-01T00:00:00Z" for first_ts and
-    // last_ts, which is 24 orders of magnitude outside it.
-    // nanos is always >= 0, so it can only push the result up.
+    // Reject what int64 nanoseconds cannot hold rather than overflow; a
+    // never-written stream reports "0001-01-01T00:00:00Z". nanos >= 0.
     if ((secs > (INT64_MAX - nanos) / 1000000000LL)
         || (secs < INT64_MIN / 1000000000LL))
         return NATS_INVALID_ARG;

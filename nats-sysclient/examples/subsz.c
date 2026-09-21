@@ -13,11 +13,6 @@
 
 // Lists the subscriptions on every server in the cluster.
 //
-// Shows the walk list: one ping, then one independent, resumable walk per
-// server that answered. Each walk owns its first page and its own offset, and
-// shares nothing but the connection, so they may also be run concurrently
-// from separate threads.
-//
 // Prerequisites:
 //   A nats-server with a system account, e.g.
 //
@@ -42,9 +37,8 @@
 
 #define DEFAULT_URL "nats://admin:s3cr3t!@127.0.0.1:4222"
 
-// Large enough that each server answers in one page. Paging SUBSZ can miss
-// subscriptions and repeat others (nats-server#7009), so a complete list means
-// asking for a Limit above the reported Total — see the README.
+// Large enough for one page per server: paging SUBSZ is unreliable
+// (nats-server#7009).
 #define PAGE_SIZE (4096)
 
 static const char *
@@ -59,8 +53,7 @@ typedef struct
     int subs;
 } walkState;
 
-// Called once per page. The page is borrowed and destroyed as soon as this
-// returns, so copy anything worth keeping. Returning false stops the walk.
+// Called once per page; the page is destroyed when this returns.
 static bool
 _onPage(const natsSysSubszResp *page, void *closure)
 {

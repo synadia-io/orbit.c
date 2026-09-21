@@ -22,9 +22,8 @@
 #define FIELD_PTR(dst, f) ((void *) ((char *) (dst) + (f)->Off))
 #define COUNT_PTR(dst, f) ((int *) ((char *) (dst) + (f)->CntOff))
 
-// Looks up 'key' and applies the policy every combinator shares: an absent key
-// or an explicit null yields no node (and no error), a present key of the wrong
-// type is NATS_INVALID_ARG. *node is NULL when there is nothing to decode.
+// *node is NULL (with NATS_OK) for an absent or null key; a wrong type is
+// NATS_INVALID_ARG.
 static natsStatus
 _lookupTyped(natsJSON **node, natsJSON *obj, const char *key, natsJSONType want)
 {
@@ -45,8 +44,7 @@ _lookupTyped(natsJSON **node, natsJSON *obj, const char *key, natsJSONType want)
     return NATS_OK;
 }
 
-// The array at 'key', with its size, under the same policy: *arr is NULL for
-// an absent, null or empty array so callers can return at once.
+// As above for an array, which is also NULL when empty.
 static natsStatus
 _lookupArray(natsJSON **arr, int *n, natsJSON *obj, const char *key)
 {
@@ -58,10 +56,7 @@ _lookupArray(natsJSON **arr, int *n, natsJSON *obj, const char *key)
     return s;
 }
 
-// Copies the input text one node was parsed from into a freshly allocated
-// NUL-terminated string. The span borrows from the message the tree was parsed
-// from, which sysclient.c keeps alive until the tree is gone, so no
-// re-serialization is needed: one malloc and one memcpy per subtree.
+// Copies the input text a node was parsed from into a new string.
 static natsStatus
 _nodeToStr(char **out, natsJSON *node)
 {
@@ -82,9 +77,7 @@ _nodeToStr(char **out, natsJSON *node)
     return NATS_OK;
 }
 
-// Copies the input text of the value at 'key' verbatim; *out is NULL when the
-// key is absent or null. Any node type is acceptable: these are opaque
-// subtrees.
+// *out is NULL when the key is absent or null; any node type is accepted.
 static natsStatus
 _rawJSONField(char **out, natsJSON *obj, const char *key)
 {
@@ -136,10 +129,7 @@ sysclient_valueArray(void **out, int *count, natsJSON *obj, const char *key,
             s = parse(block + (size_t) i * elemSize, elem);
         if (s != NATS_OK)
         {
-            // The caller must never see a partly-populated array. Element i is
-            // included in the count: parse() may have failed part-way and left
-            // members allocated behind it. Every sysFreeFn tolerates a zeroed
-            // element, and the block was calloc'd.
+            // Element i is included: parse() may have failed part-way.
             void *built = block;
             int   nb    = i + 1;
 
@@ -362,11 +352,8 @@ sysclient_freeStrArray(char ***arr, int *count)
     sysclient_freePtrArray((void ***) arr, count, NULL);
 }
 
-// The narrowing kinds range-check rather than truncate: a value the member
-// cannot hold is a malformed response, and silently storing 0 for 4294967296
-// would be invisible to the caller. The accessors already reject a literal too
-// large for int64/uint64; these two add what only the table knows, the width of
-// the member it is about to write.
+// Narrowing kinds range-check rather than truncate: a value the member cannot
+// hold is a malformed response.
 static natsStatus
 _getRanged(natsJSON *obj, const char *key, int64_t lo, int64_t hi, int64_t *out)
 {
@@ -402,9 +389,6 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n)
 
         switch (f->Kind)
         {
-            // Moved rather than copied: the tree is private to the reply
-            // decoder in sysclient.c and destroyed as soon as the payload is
-            // decoded, so nothing else will ever read these strings from it.
             case SYS_FLD_STR:
                 s = natsJSON_TakeStr(obj, f->Key, (char **) p);
                 break;
@@ -444,8 +428,6 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n)
                 break;
         }
 
-        // A key that is absent or explicitly null leaves the zero value in
-        // place.
         if (s == NATS_NOT_FOUND)
             s = NATS_OK;
     }

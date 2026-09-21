@@ -58,8 +58,6 @@ natsSysStatszOptions_Init(natsSysStatszOptions *opts)
     return sysclient_initOpts(opts, sizeof(*opts));
 }
 
-// STATSZ has no options of its own, so the request is the five optional server
-// filter keys and nothing else.
 static natsStatus
 _marshalOptions(natsBuffer *buf, const void *optsv)
 {

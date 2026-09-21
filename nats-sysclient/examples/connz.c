@@ -13,10 +13,6 @@
 
 // Lists every connection on one server, a page at a time.
 //
-// CONNZ returns one page per request. Rather than tracking offsets yourself,
-// hand a handler to natsSysClient_ConnzEach and it is called once per page
-// until the server runs out or the handler asks to stop.
-//
 // Prerequisites:
 //   A nats-server with a system account, e.g.
 //
@@ -55,8 +51,7 @@ typedef struct
     int conns;
 } walkState;
 
-// Called once per page. The page is borrowed and destroyed as soon as this
-// returns, so copy anything worth keeping. Returning false stops the walk.
+// Called once per page; the page is destroyed when this returns.
 static bool
 _onPage(const natsSysConnzResp *page, void *closure)
 {
@@ -80,8 +75,7 @@ _onPage(const natsSysConnzResp *page, void *closure)
 
     st->conns += page->Connz.ConnsCount;
 
-    // A guard against walking a very busy server forever. Everything already
-    // printed stays valid; the walk simply returns NATS_OK early.
+    // Stop early on a very busy server.
     return (st->conns < MAX_CONNS);
 }
 
@@ -114,12 +108,8 @@ main(int argc, char **argv)
         return 1;
     }
 
-    // A walk covers one server, so it needs a server ID. "PING" is a valid
-    // target for a by-ID request — it reaches every server and the first reply
-    // wins — which makes it a one-round-trip way to name a server without
-    // gathering the whole cluster. It is only good for *finding* an ID: the
-    // walk itself must use a real one, or successive pages could be answered
-    // by different servers.
+    // "PING" as a by-ID target reaches every server and the first reply wins,
+    // which is enough to discover an ID; the walk itself must use a real one.
     if (serverID == NULL)
     {
         s = natsSysClient_Connz(&probe, sys, "PING", NULL, 0);
@@ -149,7 +139,6 @@ main(int argc, char **argv)
 
     printf("Walking CONNZ on %s, %d per page\n\n", serverID, PAGE_SIZE);
 
-    // The timeout is the budget for the whole walk, not for each page.
     s = natsSysClient_ConnzEach(sys, serverID, &opts, 30000, _onPage, &st);
     if (s != NATS_OK)
     {

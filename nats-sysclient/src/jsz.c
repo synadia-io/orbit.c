@@ -11,11 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// JSZ paginates over accounts rather than a flat list, and only when
-// opts->Accounts is set, so its walk adapters differ from the CONNZ and SUBSZ
-// ones in two places: the total comes from the flattened
-// JetStreamStats.Accounts, and a request without Accounts yields exactly one
-// page (_isPaged).
+// JSZ paginates over accounts, and only when opts->Accounts is set; the total
+// is the flattened JetStreamStats.Accounts.
 
 #include "jsz.h"
 
@@ -37,7 +34,6 @@ static const sysField _streamDetailFields[] = {
     SYS_F(SYS_FLD_STR, natsSysStreamDetail, Name, "name"),
     SYS_F(SYS_FLD_STR, natsSysStreamDetail, Created, "created"),
     SYS_F(SYS_FLD_STR, natsSysStreamDetail, RaftGroup, "stream_raft_group"),
-    // Carried verbatim; see the note in jsz.h.
     SYS_F(SYS_FLD_RAWJSON, natsSysStreamDetail, ClusterJSON, "cluster"),
     SYS_F(SYS_FLD_RAWJSON, natsSysStreamDetail, ConfigJSON, "config"),
     SYS_F(SYS_FLD_RAWJSON, natsSysStreamDetail, StateJSON, "state"),
@@ -95,7 +91,6 @@ _marshalOptions(natsBuffer *buf, const void *optsv)
     return natsJSONWriter_Status(&w);
 }
 
-// Deep-copies 'src' (NULL meaning defaults) into the zeroed 'dst'; a
 // sysWalkOps.CopyOptions.
 static natsStatus
 _copyOptions(void *dstv, const void *srcv)
@@ -107,10 +102,8 @@ _copyOptions(void *dstv, const void *srcv)
     if (src == NULL)
         return natsSysJszOptions_Init(dst);
 
-    // The struct copy carries every scalar, so a new one cannot be forgotten
-    // here. The members that need their own storage are then cleared before
-    // being copied, so a failure part-way leaves _freeOptionsCopy nothing but
-    // owned strings or NULL.
+    // Struct-copy the scalars, then clear and duplicate the strings so a
+    // failure part-way leaves only owned or NULL pointers.
     *dst = *src;
     dst->Account = NULL;
     memset(&dst->Filter, 0, sizeof(dst->Filter));
@@ -121,7 +114,7 @@ _copyOptions(void *dstv, const void *srcv)
     return s;
 }
 
-// Releases the members of an options copy; a sysWalkOps.FreeOptions.
+// sysWalkOps.FreeOptions.
 static void
 _freeOptionsCopy(void *optsv)
 {
@@ -279,12 +272,7 @@ natsSysJszRespList_Destroy(natsSysJszRespList *list)
                        &_endpoint);
 }
 
-//
-// Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
-//
-
-// The options are borrowed, so the offset is advanced on a shallow copy. Only
-// scalars differ between pages, and the copy lives no longer than this call.
+// sysWalkOps.Fetch: the offset is advanced on a shallow copy of the options.
 static natsStatus
 _fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
        int offset, int64_t timeout)

@@ -24,15 +24,12 @@ extern "C" {
 
 /** \defgroup natsSysClientGroup NATS System Client
  *
- * A client for the NATS server monitoring endpoints published over the `$SYS`
- * account: `VARZ`, `STATSZ`, `CONNZ`, `SUBSZ`, `HEALTHZ` and `JSZ`.
+ * Client for the server monitoring endpoints published on the `$SYS`
+ * account: `VARZ`, `STATSZ`, `CONNZ`, `SUBSZ`, `HEALTHZ` and `JSZ`. Each can
+ * be queried from one server by ID, or from every server by a `PING`
+ * scatter-gather. The connection must be on the system account.
  *
- * Every endpoint can be queried two ways: from one server by its ID, or from
- * every server in the cluster by scattering the request and gathering the
- * replies. The connection handed to #natsSysClient_Create must be authenticated
- * to the system account, otherwise no server will answer.
- *
- * Response structures follow the NATS server v2.10.23 wire format.
+ * Response structures follow the nats-server v2.10.23 wire format.
  * @{
  */
 
@@ -42,228 +39,166 @@ extern "C" {
  *  @{
  */
 
-/** \brief Default request timeout, in milliseconds.
- *
- * Used whenever a request function is passed a `timeout` of 0.
- */
+/** \brief Request timeout, in milliseconds, used when a call is passed 0. */
 #define NATS_SYS_DEFAULT_REQUEST_TIMEOUT (10000)
 
-/** \brief Default stall interval, in milliseconds.
- *
- * Once the first reply to a scatter-gather has arrived, the gather ends if no
- * further reply turns up within this window.
- */
+/** \brief Default stall interval for a scatter-gather, in milliseconds. */
 #define NATS_SYS_DEFAULT_STALL (300)
 
-/** \brief A client for the NATS system monitoring endpoints.
+/** \brief A client for the system monitoring endpoints.
  *
- * Created with #natsSysClient_Create and released with #natsSysClient_Destroy.
- * The client borrows its #natsConnection and never closes it.
- *
- * The client holds no mutable state after creation, so it is safe to use from
- * multiple threads concurrently.
+ * Holds no mutable state after #natsSysClient_Create, so it may be used from
+ * several threads at once.
  */
 typedef struct __natsSysClient natsSysClient;
 
-/** \brief Options controlling how a scatter-gather request terminates.
+/** \brief Options controlling when a `*Ping` gather stops.
  *
- * Initialise with #natsSysClientOpts_Init before setting fields. Both settings
- * apply only to the `*Ping` calls; a request aimed at a single server ID always
- * waits for exactly one reply.
+ * Initialize with #natsSysClientOpts_Init. A by-ID request always waits for
+ * exactly one reply and ignores these.
  */
 typedef struct __natsSysClientOpts
 {
-    /** \brief Number of servers to wait for a reply from.
-     *
-     * The gather stops as soon as this many replies have arrived. Set it to
-     * the number of servers in the cluster as seen by the connected server.
-     * Leave at the #natsSysClientOpts_Init default of -1 to rely on
-     * #StallInterval alone.
-     */
-    int ServerCount;
-
-    /** \brief Stall interval in milliseconds; see #NATS_SYS_DEFAULT_STALL.
-     *
-     * Must be positive: #natsSysClient_Create rejects 0 rather than treating
-     * it as "no stall", since that would make every gather wait out the full
-     * request timeout.
-     */
-    int64_t StallInterval;
+    int     ServerCount;   ///< Stop after this many replies; -1 for no limit.
+    int64_t StallInterval; ///< Stop when no reply arrives within this many ms; must be > 0.
 
 } natsSysClientOpts;
 
-/** \brief Identifies the server that produced a response.
- *
- * Present on every response, decoded from the envelope's `server` object.
- */
+/** \brief The server that produced a response. */
 typedef struct __natsSysServerInfo
 {
-    char    *Name;      ///< Configured server name.
-    char    *Host;      ///< Host the server is listening on.
-    char    *ID;        ///< Server ID; the value to pass as `serverID`.
-    char    *Cluster;   ///< Cluster name; `NULL` when not clustered.
-    char    *Domain;    ///< JetStream domain; `NULL` when unset.
-    char    *Version;   ///< Server version (wire key `ver`).
-    char   **Tags;      ///< Server tags.
-    int      TagsCount; ///< Number of entries in #Tags.
-    uint64_t Seq;       ///< Sequence number of this event.
-    bool     JetStream; ///< Whether JetStream is enabled.
-    char    *Time;      ///< Event timestamp as RFC 3339 text; see #natsSysTime_Parse.
+    char    *Name;
+    char    *Host;
+    char    *ID;      ///< The value to pass as `serverID`.
+    char    *Cluster;
+    char    *Domain;
+    char    *Version; ///< Wire key `ver`.
+    char   **Tags;
+    int      TagsCount;
+    uint64_t Seq;
+    bool     JetStream;
+    char    *Time;    ///< RFC 3339; see #natsSysTime_Parse.
 
 } natsSysServerInfo;
 
-/** \brief An error reported by the server in a response envelope.
+/** \brief An error reported in a response envelope.
  *
- * \warning The client decodes this field but never acts on it. A response
- * carrying an error still returns #NATS_OK with a zeroed payload, so check
- * `Code != 0` before trusting the payload.
+ * The library does not act on it: a response carrying an error still returns
+ * #NATS_OK with a zeroed payload. Check `Code != 0`.
  */
 typedef struct __natsSysAPIError
 {
-    int      Code;        ///< HTTP-like status code; 0 when no error.
-    uint16_t ErrCode;     ///< Server error code.
-    char    *Description; ///< Human-readable description; `NULL` when absent.
+    int      Code;    ///< 0 when no error.
+    uint16_t ErrCode;
+    char    *Description;
 
 } natsSysAPIError;
 
-/** \brief Filters that select which servers answer a scatter-gather request.
+/** \brief Selects which servers answer a `*Ping` request.
  *
- * Every field is optional; a zero-valued field is left out of the request.
- * These keys are flattened into the request object rather than nested. VARZ,
- * STATSZ, CONNZ and JSZ carry this filter; SUBSZ does not, although the
- * server would accept it.
+ * A zero-valued field is left out of the request. SUBSZ has no filter.
  */
 typedef struct __natsSysEventFilterOptions
 {
-    const char  *Name;      ///< Match one server by name (wire key `server_name`).
-    const char  *Cluster;   ///< Match servers in this cluster.
-    const char  *Host;      ///< Match servers on this host.
-    const char **Tags;      ///< Match servers carrying all of these tags; no entry may be `NULL`.
-    int          TagsCount; ///< Number of entries in #Tags.
-    const char  *Domain;    ///< Match servers in this JetStream domain.
+    const char  *Name;    ///< Wire key `server_name`.
+    const char  *Cluster;
+    const char  *Host;
+    const char **Tags;    ///< All must match; no entry may be `NULL`.
+    int          TagsCount;
+    const char  *Domain;  ///< JetStream domain.
 
 } natsSysEventFilterOptions;
 
-/** \brief Details of one subscription.
- *
- * Returned by CONNZ (per connection) and by SUBSZ (per server), which is why
- * it lives here rather than in either endpoint's header.
- */
+/** \brief One subscription, as reported by CONNZ and SUBSZ. */
 typedef struct __natsSysSubDetail
 {
-    char   *Account; ///< Account the subscription belongs to.
-    char   *Subject; ///< Subject subscribed to.
-    char   *Queue;   ///< Queue group name (wire key `qgroup`); `NULL` when none.
-    char   *Sid;     ///< Subscription ID, as chosen by the client.
-    int64_t Msgs;    ///< Messages delivered to this subscription.
-    int64_t Max;     ///< Auto-unsubscribe threshold; 0 when unset.
-    uint64_t Cid;    ///< Connection ID owning the subscription.
+    char    *Account;
+    char    *Subject;
+    char    *Queue;   ///< Wire key `qgroup`.
+    char    *Sid;
+    int64_t  Msgs;
+    int64_t  Max;     ///< Auto-unsubscribe threshold; 0 when unset.
+    uint64_t Cid;
 
 } natsSysSubDetail;
 
-//
-// Types shared by more than one endpoint.
-//
-// Grouping them here keeps the endpoint headers independent of one another:
-// `SlowConsumersStats` is used by VARZ but belongs to STATSZ's payload, and
-// `JetStreamVarz` the other way round, so declaring each beside its own
-// endpoint would make varz.h and statsz.h mutually dependent.
-//
-
-/** \brief Counts of connections dropped for being too slow. */
+/** \brief Connections dropped for being too slow, by kind. */
 typedef struct __natsSysSlowConsumersStats
 {
-    uint64_t Clients;  ///< Slow client connections.
-    uint64_t Routes;   ///< Slow route connections.
-    uint64_t Gateways; ///< Slow gateway connections.
-    uint64_t Leafs;    ///< Slow leaf node connections.
+    uint64_t Clients;
+    uint64_t Routes;
+    uint64_t Gateways;
+    uint64_t Leafs;
 
 } natsSysSlowConsumersStats;
 
-/** \brief Counts of JetStream API calls. */
+/** \brief JetStream API call counts. */
 typedef struct __natsSysJetStreamAPIStats
 {
-    uint64_t Total;    ///< API requests handled.
-    uint64_t Errors;   ///< API requests that failed.
-    uint64_t Inflight; ///< API requests currently being handled.
+    uint64_t Total;
+    uint64_t Errors;
+    uint64_t Inflight;
 
 } natsSysJetStreamAPIStats;
 
-/** \brief JetStream resource usage for a server or account.
- *
- * In the JSZ payload these members are flattened into the enclosing object
- * rather than nested.
- */
+/** \brief JetStream resource usage for a server or account. */
 typedef struct __natsSysJetStreamStats
 {
-    uint64_t                 Memory;         ///< Memory in use, in bytes.
-    uint64_t                 Store;          ///< Storage in use, in bytes.
-    uint64_t                 ReservedMemory; ///< Memory reserved, in bytes.
-    uint64_t                 ReservedStore;  ///< Storage reserved, in bytes.
-    int                      Accounts;       ///< Number of accounts using JetStream.
-    int                      HAAssets;       ///< Number of highly-available assets.
-    natsSysJetStreamAPIStats API;            ///< API call counts.
+    uint64_t                 Memory;         ///< Bytes.
+    uint64_t                 Store;          ///< Bytes (wire key `storage`).
+    uint64_t                 ReservedMemory; ///< Bytes.
+    uint64_t                 ReservedStore;  ///< Bytes (wire key `reserved_storage`).
+    int                      Accounts;
+    int                      HAAssets;
+    natsSysJetStreamAPIStats API;
 
 } natsSysJetStreamStats;
 
 /** \brief A server's JetStream configuration. */
 typedef struct __natsSysJetStreamConfig
 {
-    int64_t MaxMemory; ///< Maximum memory, in bytes.
-    int64_t MaxStore;  ///< Maximum storage, in bytes.
-    char   *StoreDir;  ///< Storage directory.
-
-    /** \brief Sync interval in **nanoseconds**.
-     *
-     * \note The server sends this as an integer count of nanoseconds. Every
-     * other timeout in orbit.c is in milliseconds, so convert before comparing.
-     */
-    int64_t SyncInterval;
-
-    bool  SyncAlways; ///< Whether every write is synced.
-    char *Domain;     ///< JetStream domain name.
-    bool  CompressOK; ///< Whether the server supports compression.
-    char *UniqueTag;  ///< Tag used to keep replicas apart.
+    int64_t MaxMemory;    ///< Bytes.
+    int64_t MaxStore;     ///< Bytes (wire key `max_storage`).
+    char   *StoreDir;
+    int64_t SyncInterval; ///< Nanoseconds.
+    bool    SyncAlways;
+    char   *Domain;
+    bool    CompressOK;
+    char   *UniqueTag;
 
 } natsSysJetStreamConfig;
 
 /** \brief One peer in a Raft group. */
 typedef struct __natsSysPeerInfo
 {
-    char *Name;    ///< Server name.
-    bool  Current; ///< Whether the peer is up to date.
-    bool  Offline; ///< Whether the peer is unreachable.
-
-    /** \brief Time since the peer was last seen, in **nanoseconds**. */
-    int64_t Active;
-
-    uint64_t Lag;  ///< How far behind the peer is.
-    char    *Peer; ///< Opaque peer ID.
+    char    *Name;
+    bool     Current;
+    bool     Offline;
+    int64_t  Active; ///< Nanoseconds since last seen.
+    uint64_t Lag;
+    char    *Peer;
 
 } natsSysPeerInfo;
 
-/** \brief The JetStream meta group (the Raft group managing assets). */
+/** \brief The JetStream meta group. */
 typedef struct __natsSysMetaClusterInfo
 {
-    char              *Name;          ///< Meta cluster name.
-    char              *Leader;        ///< Server name of the leader.
-    char              *Peer;          ///< This server's peer ID.
-    natsSysPeerInfo  **Replicas;      ///< Other peers in the group.
-    int                ReplicasCount; ///< Number of entries in #Replicas.
-    int                Size;          ///< Number of servers in the group.
-    int                Pending;       ///< Pending meta-layer operations.
+    char             *Name;
+    char             *Leader;
+    char             *Peer;
+    natsSysPeerInfo **Replicas;
+    int               ReplicasCount;
+    int               Size;    ///< Wire key `cluster_size`.
+    int               Pending;
 
 } natsSysMetaClusterInfo;
 
-/** \brief A server's JetStream state.
- *
- * Each member is `NULL` when the server did not report it.
- */
+/** \brief A server's JetStream state; each member is `NULL` when not reported. */
 typedef struct __natsSysJetStreamVarz
 {
-    natsSysJetStreamConfig *Config; ///< Configuration; `NULL` when absent.
-    natsSysJetStreamStats  *Stats;  ///< Resource usage; `NULL` when absent.
-    natsSysMetaClusterInfo *Meta;   ///< Meta group; `NULL` when absent.
+    natsSysJetStreamConfig *Config;
+    natsSysJetStreamStats  *Stats;
+    natsSysMetaClusterInfo *Meta;
 
 } natsSysJetStreamVarz;
 
@@ -275,63 +210,45 @@ typedef struct __natsSysJetStreamVarz
  *  @{
  */
 
-/** \brief Initialises a #natsSysClientOpts to its defaults.
+/** \brief Initializes options to their defaults: no server count, a
+ * #NATS_SYS_DEFAULT_STALL stall interval.
  *
- * Sets #StallInterval to #NATS_SYS_DEFAULT_STALL and #ServerCount to -1
- * (disabled).
- *
- * @param opts the options struct to initialise; cannot be `NULL`.
- * @return #NATS_OK on success, #NATS_INVALID_ARG if `opts` is `NULL`.
+ * @param opts the options to initialize.
  */
 NATS_EXTERN natsStatus
 natsSysClientOpts_Init(natsSysClientOpts *opts);
 
 /** \brief Creates a system client over an existing connection.
  *
- * The connection must be authenticated to the `$SYS` account and must stay open
- * for the lifetime of the client. It is borrowed, not owned: destroying the
- * client leaves the connection untouched.
+ * The connection is borrowed and must stay open for the client's lifetime.
  *
- * @param newClient out-param set to the new client, or `NULL` on error.
- * @param nc the NATS connection; borrowed, must not be `NULL`.
- * @param opts the options, or `NULL` for the #natsSysClientOpts_Init defaults.
- * @return #NATS_OK on success, #NATS_INVALID_ARG for `NULL` arguments or for
- * an out-of-range option (a #natsSysClientOpts.ServerCount that is 0 or below
- * -1, or a #natsSysClientOpts.StallInterval that is 0 or below),
- * #NATS_NO_MEMORY on allocation failure.
+ * @param newClient the location where to store the new client.
+ * @param nc a connection on the system account.
+ * @param opts the options, or `NULL` for the defaults.
+ * @return #NATS_INVALID_ARG for a `ServerCount` of 0 or below -1, or a
+ * `StallInterval` of 0 or below.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Create(natsSysClient **newClient, natsConnection *nc,
                      const natsSysClientOpts *opts);
 
-/** \brief Destroys a client created by #natsSysClient_Create.
+/** \brief Destroys the client. The connection is left open.
  *
- * Passing `NULL` is a no-op. The underlying connection is not closed.
- *
- * @param client the client to destroy.
+ * @param client the client to destroy; `NULL` is a no-op.
  */
 NATS_EXTERN void
 natsSysClient_Destroy(natsSysClient *client);
 
-/** \brief Converts an RFC 3339 timestamp from a response into Unix nanoseconds.
+/** \brief Converts an RFC 3339 timestamp to nanoseconds since the Unix epoch.
  *
- * Timestamps are carried as text rather than a numeric type: orbit.c has no
- * date parser and cnats does not export one, so decoding them in the library
- * would mean shipping a second, unrelated implementation. This helper is
- * provided so callers are not stranded.
+ * Accepts `YYYY-MM-DDTHH:MM:SS`, an optional fraction, and `Z` or a
+ * `+HH:MM`/`-HH:MM` offset.
  *
- * Accepts `YYYY-MM-DDTHH:MM:SS`, an optional fractional-second part, and either
- * `Z` or a `+HH:MM` / `-HH:MM` offset.
- *
- * @param unixNanos out-param set to nanoseconds since the Unix epoch, UTC.
- * @param rfc3339 the timestamp text, as found in e.g. #natsSysServerInfo.Time.
- * @return #NATS_OK on success, #NATS_INVALID_ARG for `NULL` arguments, text
- * that is not a valid RFC 3339 timestamp, or a timestamp outside
- * 1677-09-21 … 2262-04-11, the range `int64` nanoseconds can represent.
- *
- * \note That last case is reachable from real data and shares its status with
- * malformed text: a JetStream stream that has never been written reports
- * `0001-01-01T00:00:00Z`, so "never set" is indistinguishable from garbage.
+ * @param unixNanos the location where to store the result.
+ * @param rfc3339 the text, as found in e.g. #natsSysServerInfo.Time.
+ * @return #NATS_INVALID_ARG for malformed text, or a timestamp outside
+ * 1677-09-21 … 2262-04-11 (the `int64` nanosecond range); a never-written
+ * JetStream stream reports `0001-01-01T00:00:00Z`.
  */
 NATS_EXTERN natsStatus
 natsSysTime_Parse(int64_t *unixNanos, const char *rfc3339);

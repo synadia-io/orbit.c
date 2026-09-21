@@ -96,11 +96,8 @@ static bool        keepServerOutput = false;
         return;                                \
     }
 
-// Server lifecycle
-//
-// Unlike the other suites this tracks a set of pids rather than one: the
-// cluster tests start three servers, and a test that bails early via testCond
-// would otherwise leave the extras running.
+// Server lifecycle. A set of pids rather than one: the cluster tests start
+// three servers, and a testCond bail-out must not leave them running.
 
 typedef pid_t natsPid;
 
@@ -146,10 +143,8 @@ _stopAllServers(void)
         _stopServer(g_serverPids[0]);
 }
 
-// Connections and clients a test has open, so main() can release them when a
-// testCond bail-out skips the test's own teardown, the same way g_serverPids
-// covers the servers it started. SETUP/TEARDOWN and the cluster helpers
-// register on creation and forget on destroy.
+// Connections and clients a test has open, released by main() when a
+// testCond bail-out skips the test's own teardown.
 
 #define MAX_HANDLES (16)
 
@@ -224,20 +219,11 @@ _nowMs(void)
     return ((int64_t) ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
 }
 
-// Every wait below is a deadline in milliseconds rather than a count of
-// attempts, so the poll interval can be chosen for how fast the thing being
-// waited on actually settles without also deciding how long we are willing to
-// wait. Attempts × interval couples the two, and the probes here are not free:
-// a gather that has not converged costs its stall interval before returning.
+// Waits are deadlines with a poll interval, not attempt counts.
 #define SERVER_POLL_MS  (10)
 #define CLUSTER_POLL_MS (50)
 
 // Waits up to 'budgetMs' for a server to accept connections.
-//
-// The other suites poll this every 200ms, two orders of magnitude coarser than
-// the event: a local nats-server binds its port in about 5ms, so a 200ms
-// interval sleeps through ~195ms of every server start, and this suite starts
-// a server in nearly every test.
 static natsStatus
 _waitForServer(const char *url, int64_t budgetMs)
 {
@@ -303,14 +289,8 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
             return NATS_INVALID_PID;
         }
 
-        // Connecting proves *a* server is listening, not that it is ours. If a
-        // stray server already held the port, our child died on bind and the
-        // connection above went to the stranger — the test would then run
-        // against a server it cannot configure or stop, and fail somewhere far
-        // from the cause. A child that has already exited says exactly that.
-        //
-        // The grace is needed because a stray server answers immediately, so
-        // the wait above returns before our child has finished failing to bind.
+        // Connecting proves *a* server is listening. If a stray one held the
+        // port, our child died on bind; give it a moment to have done so.
         usleep(SERVER_POLL_MS * 1000);
         if (waitpid(pid, &status, WNOHANG) == pid)
         {
@@ -362,13 +342,8 @@ _rmtree(const char *path)
 
 static int _uniqueCounter = 0;
 
-// Paths to sweep on the way out.
-//
-// testCond returns from the test the moment an assertion fails, so a test that
-// bails mid-way never reaches its own teardown and leaves the server's store
-// directory and config file behind. Registering them here means main() can
-// clean up regardless of how the test ended, the same way g_serverPids lets it
-// stop servers a bailing test never stopped.
+// Config files and store directories, removed by main() however the test
+// ended.
 #define MAX_TMP_PATHS (64)
 
 static char g_tmpPaths[MAX_TMP_PATHS][128];
@@ -396,13 +371,8 @@ _makeUniqueDir(char *buf, int bufLen, const char *prefix)
     _rememberPath(buf);
 }
 
-// A stand-in for nats-server's HEALTHZ endpoint.
-//
-// The real endpoint needs a configured system account and returns whatever the
-// server happens to be doing; a stand-in gives byte-exact control over both the
-// request seen and the response sent, so these tests can assert the wire format
-// in both directions. The end-to-end tests against a real $SYS cluster come
-// with the remaining endpoints.
+// A stand-in for nats-server's HEALTHZ endpoint, giving byte-exact control
+// over the request seen and the response sent.
 typedef struct
 {
     const char *reply;
@@ -3437,13 +3407,8 @@ test_JszRealServer(void)
 }
 
 //
-// Cluster
-//
-// Everything above talks to a single server, so a gather only ever collects one
-// reply and a walk list only ever holds one walk. These tests run a real
-// three-node cluster, which is the only way to cover the gather actually
-// gathering, walks being independent of one another, and a by-ID request
-// reaching a server the client is not connected to.
+// Cluster: a real three-node cluster, so a gather gathers more than one reply
+// and a by-ID request reaches a server the client is not connected to.
 
 #define CLUSTER_SIZE (3)
 
@@ -3601,16 +3566,9 @@ _stopCluster(cluster *c)
     }
 }
 
-// Waits for the cluster to converge by asking it, rather than sleeping a fixed
-// amount, which also exercises the gather on the way in.
-//
-// The condition is every node agreeing that all three are active, not simply
-// three nodes answering: a node answers on $SYS as soon as its routes are up,
-// but active_servers is gossiped and settles a beat later. Waiting on the
-// weaker condition makes anything that reads active_servers intermittent.
-// 'out' receives the STATSZ gather that proved convergence, so a caller that
-// wants to assert on it need not pay for a second round trip. Pass NULL to
-// discard it. Untouched unless NATS_OK is returned.
+// Waits until every node reports all three as active; a node answers on $SYS
+// before active_servers has settled, so three replies alone is not enough.
+// 'out', if not NULL, receives the STATSZ gather that proved convergence.
 static natsStatus
 _waitForCluster(cluster *c, int64_t budgetMs, natsSysStatszRespList *out)
 {
@@ -4118,15 +4076,8 @@ test_ClusterSubszPingEach(void)
         testCond(ok);
     }
 
-    // Only the page *count* is checked above, never the contents, because a
-    // paginated SUBSZ cannot deliver them: nats-server#7009 pages by offset
-    // over a sublist with no stable order, so entries are skipped and others
-    // repeated while the per-page counts stay consistent. Measured on
-    // v2.14.0-RC.1: of seven subscriptions on one node, a limit-2 walk
-    // returned one of them twice and three of them not at all. Nothing above
-    // can be tightened until the server is fixed, so completeness is checked
-    // below
-    // without pagination instead.
+    // Only page counts are checked above: paginated SUBSZ skips and repeats
+    // entries (nats-server#7009), so completeness is checked unpaginated.
     test("An unpaginated ping reports each node's subscriptions exactly once: ");
     natsSysSubszOptions_Init(&opts);
     opts.Subscriptions = true;
@@ -4191,16 +4142,8 @@ test_ClusterJszPingEach(void)
     s = _waitForMetaLeader(&c, 20000);
     testCond(s == NATS_OK);
 
-    // Replicated across all three nodes so every node reports every account,
-    // which is what makes the per-walk page counts predictable.
-    //
-    // Retried rather than issued once: placing a replicated asset is
-    // eventually consistent, and the meta group reports a leader and a full
-    // membership before it will reliably accept one. Measured on
-    // v2.14.0-RC.1, a single attempt straight after that barrier is refused
-    // roughly one run in four, and no stronger readiness predicate available
-    // through JSZ — including every listed peer being current and online —
-    // moved that number.
+    // Replicated so every node reports every account. Retried: the meta group
+    // reports a leader before it reliably accepts a replicated asset.
     test("Give each account a replicated stream: ");
     for (i = 0; (i < 3) && (s == NATS_OK); i++)
     {

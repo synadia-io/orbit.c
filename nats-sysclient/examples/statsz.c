@@ -13,11 +13,6 @@
 
 // Summarises traffic across the cluster, and shows how to bound a gather.
 //
-// A ping has no way to know how many servers should answer, so by default it
-// waits for the stall interval to elapse with no new reply. When you know the
-// cluster size, ServerCount lets the gather finish as soon as everyone has
-// answered instead of waiting out the stall.
-//
 // Prerequisites:
 //   A nats-server with a system account, e.g.
 //
@@ -94,8 +89,8 @@ main(int argc, char **argv)
         goto done;
     }
 
-    // Running out of time is normal termination for a gather, not an error, so
-    // a short count means some servers did not answer rather than a failure.
+    // Timing out is normal for a gather; a short count means some servers
+    // did not answer.
     printf("%d server(s) responded", list.Count);
     if ((expected > 0) && (list.Count < expected))
         printf(" (expected %d)", expected);
@@ -128,8 +123,7 @@ main(int argc, char **argv)
 
     printf("\nCluster totals: %" PRId64 " in, %" PRId64 " out\n", totalIn, totalOut);
 
-    // Every server reports how many it can see, so a server whose count is
-    // below the rest has not converged with the others.
+    // A server whose count is below the rest has not converged.
     for (i = 0; i < list.Count; i++)
     {
         if (list.Resps[i]->Error.Code == 0)

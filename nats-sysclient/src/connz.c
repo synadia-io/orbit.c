@@ -78,10 +78,8 @@ natsSysConnzOptions_Init(natsSysConnzOptions *opts)
     return sysclient_initOpts(opts, sizeof(*opts));
 }
 
-// Every CONNZ field is emitted whatever its value — an "empty" request still
-// carries `"sort":""` and `"state":0`. The shared server filter does omit its
-// unset keys, hence the switch to sysclient_opt* partway down. This split is
-// server-visible, so it is preserved rather than tidied away.
+// Every CONNZ field is emitted whatever its value; only the server filter
+// omits unset keys.
 static natsStatus
 _marshalOptions(natsBuffer *buf, const void *optsv)
 {
@@ -117,7 +115,6 @@ _marshalOptions(natsBuffer *buf, const void *optsv)
     return natsJSONWriter_Status(&w);
 }
 
-// Deep-copies 'src' (NULL meaning defaults) into the zeroed 'dst'; a
 // sysWalkOps.CopyOptions.
 static natsStatus
 _copyOptions(void *dstv, const void *srcv)
@@ -129,10 +126,8 @@ _copyOptions(void *dstv, const void *srcv)
     if (src == NULL)
         return natsSysConnzOptions_Init(dst);
 
-    // The struct copy carries every scalar, so a new one cannot be forgotten
-    // here. The members that need their own storage are then cleared before
-    // being copied, so a failure part-way leaves _freeOptionsCopy nothing but
-    // owned strings or NULL.
+    // Struct-copy the scalars, then clear and duplicate the strings so a
+    // failure part-way leaves only owned or NULL pointers.
     *dst = *src;
     dst->Sort          = NULL;
     dst->MQTTClient    = NULL;
@@ -151,7 +146,7 @@ _copyOptions(void *dstv, const void *srcv)
     return s;
 }
 
-// Releases the members of an options copy; a sysWalkOps.FreeOptions.
+// sysWalkOps.FreeOptions.
 static void
 _freeOptionsCopy(void *optsv)
 {
@@ -271,12 +266,7 @@ natsSysConnzRespList_Destroy(natsSysConnzRespList *list)
                        &_endpoint);
 }
 
-//
-// Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
-//
-
-// The options are borrowed, so the offset is advanced on a shallow copy. Only
-// scalars differ between pages, and the copy lives no longer than this call.
+// sysWalkOps.Fetch: the offset is advanced on a shallow copy of the options.
 static natsStatus
 _fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
        int offset, int64_t timeout)

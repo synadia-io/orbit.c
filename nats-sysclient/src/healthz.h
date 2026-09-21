@@ -26,156 +26,125 @@ extern "C" {
 
 /** \defgroup natsSysHealthzGroup HEALTHZ
  *
- * Server health, from the `$SYS.REQ.SERVER.<id>.HEALTHZ` endpoint.
+ * Server health, from `$SYS.REQ.SERVER.<id>.HEALTHZ`.
  * @{
  */
 
 /** \brief The kind of problem a #natsSysHealthzError describes. */
 typedef enum
 {
-    natsSysHealthzErrorConn = 0,   ///< Connection-level problem.
-    natsSysHealthzErrorBadRequest, ///< The health request itself was invalid.
-    natsSysHealthzErrorJetStream,  ///< JetStream is unhealthy.
-    natsSysHealthzErrorAccount,    ///< An account is unhealthy.
-    natsSysHealthzErrorStream,     ///< A stream is unhealthy.
-    natsSysHealthzErrorConsumer,   ///< A consumer is unhealthy.
+    natsSysHealthzErrorConn = 0,
+    natsSysHealthzErrorBadRequest,
+    natsSysHealthzErrorJetStream,
+    natsSysHealthzErrorAccount,
+    natsSysHealthzErrorStream,
+    natsSysHealthzErrorConsumer,
 
 } natsSysHealthzErrorType;
 
-/** \brief One problem reported by a health check.
- *
- * Only returned when #natsSysHealthzOptions.Details was set. A string field is
- * `NULL` when the server did not send it.
- */
+/** \brief One problem found by a health check; only reported when
+ * #natsSysHealthzOptions.Details is set. */
 typedef struct __natsSysHealthzError
 {
-    natsSysHealthzErrorType Type;     ///< What kind of thing is unhealthy.
-    char                   *Account;  ///< Account involved, if any.
-    char                   *Stream;   ///< Stream involved, if any.
-    char                   *Consumer; ///< Consumer involved, if any.
-    char                   *Error;    ///< Description of the problem.
+    natsSysHealthzErrorType Type;
+    char                   *Account;
+    char                   *Stream;
+    char                   *Consumer;
+    char                   *Error;
 
 } natsSysHealthzError;
 
 /** \brief The health of one server. */
 typedef struct __natsSysHealthz
 {
-    char                *Status;      ///< `"ok"` when healthy.
-    int                  StatusCode;  ///< HTTP-like status code.
-    char                *Error;       ///< Summary error; `NULL` when healthy.
-    natsSysHealthzError *Errors;      ///< Detailed problems; see #natsSysHealthzOptions.Details.
-    int                  ErrorsCount; ///< Number of entries in #Errors.
+    char                *Status;     ///< `"ok"` when healthy.
+    int                  StatusCode; ///< HTTP-like.
+    char                *Error;
+    natsSysHealthzError *Errors;
+    int                  ErrorsCount;
 
 } natsSysHealthz;
 
-/** \brief A HEALTHZ response from one server.
- *
- * \warning #Error is decoded but never acted on. Check `Error.Code != 0`
- * before trusting #Healthz.
- */
+/** \brief A HEALTHZ response. Check `Error.Code` before reading #Healthz. */
 typedef struct __natsSysHealthzResp
 {
-    natsSysServerInfo Server;  ///< Which server answered.
-    natsSysHealthz    Healthz; ///< The payload (wire key `data`).
-    natsSysAPIError   Error;   ///< Server-reported error, if any.
+    natsSysServerInfo Server;
+    natsSysHealthz    Healthz; ///< Wire key `data`.
+    natsSysAPIError   Error;
 
 } natsSysHealthzResp;
 
-/** \brief The responses gathered by #natsSysClient_HealthzPing.
+/** \brief Responses gathered by #natsSysClient_HealthzPing.
  *
- * Caller-provided, typically on the stack. #natsSysHealthzRespList_Destroy
- * releases the contents, not the list object itself. To keep one response past
- * the destroy, set its slot to `NULL` first; do not change #Count.
+ * Typically a stack object; #natsSysHealthzRespList_Destroy frees the
+ * responses and the array but not the list itself. To keep a response, set
+ * its slot to `NULL` and leave `Count` unchanged.
  */
 typedef struct __natsSysHealthzRespList
 {
-    natsSysHealthzResp **Resps; ///< One response per server that answered.
-    int                  Count; ///< Number of entries in #Resps.
+    natsSysHealthzResp **Resps;
+    int                  Count;
 
 } natsSysHealthzRespList;
 
-/** \brief Options for a HEALTHZ request.
- *
- * Initialise with #natsSysHealthzOptions_Init. Every field is optional and a
- * zero-valued one is left out of the request.
- */
+/** \brief HEALTHZ request options; a zero-valued field is left out. */
 typedef struct __natsSysHealthzOptions
 {
-    bool  JSEnabledOnly; ///< Only check that the server is connected to JetStream.
-    bool  JSServerOnly;  ///< Only check server health, skipping JetStream.
-    const char *Account; ///< Check this account; required for #Stream or #Consumer.
-    const char *Stream;  ///< Check this stream.
-    const char *Consumer; ///< Check this consumer.
-    bool  Details;       ///< Return #natsSysHealthz.Errors detail.
+    bool        JSEnabledOnly; ///< Only check that JetStream is enabled.
+    bool        JSServerOnly;  ///< Only check the server, not JetStream assets.
+    const char *Account;       ///< Required with #Stream or #Consumer.
+    const char *Stream;
+    const char *Consumer;
+    bool        Details;       ///< Populate #natsSysHealthz.Errors.
 
 } natsSysHealthzOptions;
 
-/** \brief Initialises a #natsSysHealthzOptions to its defaults (all unset).
- *
- * @param opts the options struct to initialise; cannot be `NULL`.
- * @return #NATS_OK on success, #NATS_INVALID_ARG if `opts` is `NULL`.
- */
+/** \brief Initializes options to their defaults (all unset). */
 NATS_EXTERN natsStatus
 natsSysHealthzOptions_Init(natsSysHealthzOptions *opts);
 
 /** \brief Requests the health of one server.
  *
- * @param newResp out-param set to the response; destroy with
- * #natsSysHealthzResp_Destroy. Set to `NULL` on error.
+ * @param newResp the location where to store the response; destroy with
+ * #natsSysHealthzResp_Destroy.
  * @param client the system client.
- * @param serverID the target server's ID, as found in
- * #natsSysServerInfo.ID. Cannot be `NULL` or empty.
- * @param opts the request options, or `NULL` for the defaults.
- * @param timeout milliseconds to wait, or 0 for
- * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
- * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
- * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response,
- * #NATS_NO_MEMORY on allocation failure.
+ * @param serverID the server's ID, from #natsSysServerInfo.ID.
+ * @param opts the options, or `NULL` for the defaults.
+ * @param timeout in milliseconds; 0 for #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
+ * @return #NATS_NOT_FOUND when no server with that ID answered,
+ * #NATS_TIMEOUT when it did not answer in time, #NATS_ERR for a malformed
+ * response.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Healthz(natsSysHealthzResp **newResp, natsSysClient *client,
                       const char *serverID, const natsSysHealthzOptions *opts,
                       int64_t timeout);
 
-/** \brief Requests the health of every server in the cluster.
+/** \brief Requests the health of every server.
  *
- * Scatters to `$SYS.REQ.SERVER.PING.HEALTHZ` and gathers the replies, stopping
- * on whichever comes first of the configured server count, the stall interval
- * elapsing, or `timeout`.
+ * Scatters to `$SYS.REQ.SERVER.PING.HEALTHZ` and gathers replies until the
+ * configured server count, the stall interval or `timeout` is reached.
+ * Reaching `timeout` is not an error: a gather that heard nothing returns
+ * #NATS_OK with a `Count` of 0. One malformed reply discards the whole batch.
  *
- * \note Running out of time is normal termination, not an error: a gather that
- * hears nothing before `timeout` returns #NATS_OK with a `Count` of 0. That is
- * distinct from #NATS_NO_RESPONDERS, which means the subject had no subscribers
- * at all and usually indicates the connection is not on the system account. If
- * one reply is malformed the whole batch is discarded.
- *
- * @param list out-param populated with the responses; unless the return is
- * #NATS_INVALID_ARG, always release it with #natsSysHealthzRespList_Destroy.
+ * @param list the list to fill; always destroy it with
+ * #natsSysHealthzRespList_Destroy unless the return is #NATS_INVALID_ARG.
  * @param client the system client.
- * @param opts the request options, or `NULL` for the defaults.
- * @param timeout milliseconds to wait, or 0 for
- * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
- * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
- * #NATS_NO_RESPONDERS when nothing is listening on the system subject,
- * #NATS_ERR for a malformed response, #NATS_NO_MEMORY on allocation
- * failure.
+ * @param opts the options, or `NULL` for the defaults.
+ * @param timeout in milliseconds; 0 for #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
+ * @return #NATS_NO_RESPONDERS when nothing is subscribed to the subject,
+ * usually because the connection is not on the system account; #NATS_ERR
+ * for a malformed response.
  */
 NATS_EXTERN natsStatus
 natsSysClient_HealthzPing(natsSysHealthzRespList *list, natsSysClient *client,
                           const natsSysHealthzOptions *opts, int64_t timeout);
 
-/** \brief Destroys a response returned by #natsSysClient_Healthz.
- *
- * Passing `NULL` is a no-op.
- */
+/** \brief Destroys a response; `NULL` is a no-op. */
 NATS_EXTERN void
 natsSysHealthzResp_Destroy(natsSysHealthzResp *resp);
 
-/** \brief Releases the contents of a #natsSysHealthzRespList.
- *
- * Passing `NULL` is a no-op. The list object itself is not freed.
- */
+/** \brief Destroys the contents of a list, not the list itself. */
 NATS_EXTERN void
 natsSysHealthzRespList_Destroy(natsSysHealthzRespList *list);
 

@@ -13,15 +13,6 @@
 
 // Reports JetStream state for one server, an account at a time.
 //
-// JSZ paginates over accounts, but only when Accounts is set — without it a
-// walk issues one request and yields exactly one page. Its total is the
-// account count in the flattened stats, JSInfo.JetStreamStats.Accounts, since
-// JSZ has no Total member.
-//
-// Also shows the raw-JSON subtrees: a stream's config, state and cluster have
-// no portable C representation here, so they arrive as the JSON text the
-// server sent.
-//
 // Prerequisites:
 //   A nats-server with JetStream and a system account, e.g.
 //
@@ -74,8 +65,7 @@ _printRaw(const char *label, const char *json)
     printf("        %-9s %.100s%s\n", label, json, (strlen(json) > 100 ? " ..." : ""));
 }
 
-// Called once per page. The page is borrowed and destroyed as soon as this
-// returns, so copy anything worth keeping. Returning false stops the walk.
+// Called once per page; the page is destroyed when this returns.
 static bool
 _onPage(const natsSysJszResp *page, void *closure)
 {
@@ -144,13 +134,9 @@ main(int argc, char **argv)
         return 1;
     }
 
-    // Without Accounts the response is the server-wide summary and nothing
-    // more, which is also the cheapest way to ask whether JetStream is on.
-    //
-    // "PING" is a valid target for a by-ID request — it reaches every server
-    // and the first reply wins — so when no ID was given this doubles as the
-    // way to name one, with no extra round trip. The walk below must use the
-    // real ID, or successive pages could be answered by different servers.
+    // Without Accounts the response is the server-wide summary. "PING" as a
+    // by-ID target reaches every server and the first reply wins, which is
+    // enough to discover an ID; the walk itself must use a real one.
     natsSysJszOptions_Init(&opts);
     s = natsSysClient_Jsz(&summary, sys, (serverID != NULL ? serverID : "PING"), &opts, 0);
     if (s != NATS_OK)
@@ -162,8 +148,7 @@ main(int argc, char **argv)
         goto done;
     }
 
-    // Read from the envelope, not the payload: an error response carries a
-    // zeroed payload, so JSInfo.ID could be NULL while Server.ID is not.
+    // From the envelope: an error response carries a zeroed payload.
     if (serverID == NULL)
     {
         if (summary->Error.Code != 0)
@@ -194,15 +179,12 @@ main(int argc, char **argv)
         printf("  meta group %s, leader %s, %d peer(s)\n", _orDash(summary->JSInfo.Meta->Name),
                _orDash(summary->JSInfo.Meta->Leader), summary->JSInfo.Meta->Size);
 
-    // Streams implies Accounts, and Config asks for the stream configuration
-    // alongside the state that always comes with a stream detail.
     natsSysJszOptions_Init(&opts);
     opts.Accounts = true;
     opts.Streams  = true;
     opts.Config   = true;
     opts.Limit    = PAGE_SIZE;
 
-    // The timeout is the budget for the whole walk, not for each page.
     s = natsSysClient_JszEach(sys, serverID, &opts, 30000, _onPage, &st);
     if (s != NATS_OK)
     {

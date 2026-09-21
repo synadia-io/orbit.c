@@ -13,10 +13,6 @@
 
 // Prints general information about every server in the cluster.
 //
-// Also shows the three places where a VARZ field is not the plain C type its
-// name suggests: timestamps arrive as RFC 3339 text, durations as nanoseconds,
-// and the monitoring request counters as an array rather than a map.
-//
 // Prerequisites:
 //   A nats-server with a system account, e.g.
 //
