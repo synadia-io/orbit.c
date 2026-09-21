@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// One table row per wire field, so the whole set can be read off against the Go
-// source rather than by following the parsing logic in this file.
+// One table row per wire field, so the whole set can be read off against the
+// wire format rather than by following the parsing logic in this file.
 
 #include "varz.h"
 
@@ -338,6 +338,22 @@ _freeOCSPCache(void *dst)
     sysclient_freeFields(dst, _ocspCacheFields, SYS_NFIELDS(_ocspCacheFields));
 }
 
+static void
+_freeHTTPReqStat(void *elem)
+{
+    natsSysHTTPReqStat *stat = (natsSysHTTPReqStat *) elem;
+
+    NATS_FREE(stat->Path);
+    stat->Path = NULL;
+}
+
+static void
+_freeHTTPReqStats(natsSysVarz *varz)
+{
+    sysclient_freeValueArray((void **) &varz->HTTPReqStats, &varz->HTTPReqStatsCount,
+                             sizeof(natsSysHTTPReqStat), _freeHTTPReqStat);
+}
+
 // `http_req_stats` is a JSON object keyed by path. C has no map, so its
 // members are walked in document order into a parallel array.
 static natsStatus
@@ -349,13 +365,11 @@ _parseHTTPReqStats(natsSysVarz *varz, natsJSON *node)
     int                 n;
     int                 i;
 
-    s = natsJSON_Field(node, "http_req_stats", &obj);
+    s = natsJSON_Lookup(node, "http_req_stats", &obj);
     if (s == NATS_NOT_FOUND)
         return NATS_OK;
     if (s != NATS_OK)
         return s;
-    if (natsJSON_Type(obj) == NATS_JSON_NULL)
-        return NATS_OK;
     if (natsJSON_Type(obj) != NATS_JSON_OBJECT)
         return NATS_INVALID_ARG;
 
@@ -384,11 +398,12 @@ _parseHTTPReqStats(natsSysVarz *varz, natsJSON *node)
 
         if (s != NATS_OK)
         {
-            int j;
+            // Element i is included: its Path may already be allocated.
+            void *built = arr;
+            int   nb    = i + 1;
 
-            for (j = 0; j <= i; j++)
-                NATS_FREE(arr[j].Path);
-            NATS_FREE(arr);
+            sysclient_freeValueArray(&built, &nb, sizeof(natsSysHTTPReqStat),
+                                     _freeHTTPReqStat);
             return s;
         }
     }
@@ -396,19 +411,6 @@ _parseHTTPReqStats(natsSysVarz *varz, natsJSON *node)
     varz->HTTPReqStats      = arr;
     varz->HTTPReqStatsCount = n;
     return NATS_OK;
-}
-
-static void
-_freeHTTPReqStats(natsSysVarz *varz)
-{
-    int i;
-
-    for (i = 0; (varz->HTTPReqStats != NULL) && (i < varz->HTTPReqStatsCount); i++)
-        NATS_FREE(varz->HTTPReqStats[i].Path);
-
-    NATS_FREE(varz->HTTPReqStats);
-    varz->HTTPReqStats      = NULL;
-    varz->HTTPReqStatsCount = 0;
 }
 
 static natsStatus
@@ -465,7 +467,7 @@ _freeVarz(void *dst)
                            &varz->TrustedOperatorsClaimJSONCount);
 }
 
-static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysVarzResp, Varz, SYS_SUBJ_VARZ, "data", 64,
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysVarzResp, Varz, SYS_SUBJ_VARZ, "data",
                                                   _marshalOptions, _parseVarz, _freeVarz);
 
 natsStatus

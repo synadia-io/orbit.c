@@ -145,7 +145,7 @@ _freeServerStats(void *dst)
 }
 
 // STATSZ is the one endpoint whose payload key is not "data".
-static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysStatszResp, Statsz, SYS_SUBJ_STATSZ, "statsz", 64,
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysStatszResp, Statsz, SYS_SUBJ_STATSZ, "statsz",
                                                   _marshalOptions, _parseServerStats, _freeServerStats);
 
 natsStatus

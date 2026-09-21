@@ -43,10 +43,11 @@ static const sysField _apiErrorFields[] = {
 natsStatus
 natsSysClientOpts_Init(natsSysClientOpts *opts)
 {
-    if (opts == NULL)
-        return NATS_INVALID_ARG;
+    natsStatus s = sysclient_initOpts(opts, sizeof(*opts));
 
-    memset(opts, 0, sizeof(*opts));
+    if (s != NATS_OK)
+        return s;
+
     opts->StallInterval = NATS_SYS_DEFAULT_STALL;
     // -1 means "no limit".
     opts->ServerCount = -1;
@@ -82,9 +83,8 @@ natsSysClient_Create(natsSysClient **newClient, natsConnection *nc,
     // count.
     if ((opts->ServerCount < -1) || (opts->ServerCount == 0))
         return NATS_INVALID_ARG;
-    // Rejected rather than treated as "no stall": orbit.go's StallTimer refuses
-    // interval <= 0, and silently disabling the stall would make every gather
-    // wait out the full request timeout.
+    // Rejected rather than treated as "no stall": silently disabling the stall
+    // would make every gather wait out the full request timeout.
     if (opts->StallInterval <= 0)
         return NATS_INVALID_ARG;
 
@@ -130,12 +130,18 @@ _checkTimeout(int64_t *timeout)
     return NATS_OK;
 }
 
-// Milliseconds from a monotonic clock, for whole-walk deadlines. Matches how
-// nats-extra/src/requestmany.c measures its own budget.
-static int64_t
-_nowMs(void)
+// NULL-safe strdup into an out-param.
+static natsStatus
+_dupStr(char **dst, const char *src)
 {
-    return nats_NowMonotonicInNanoSeconds() / 1000000;
+    if (src == NULL)
+    {
+        *dst = NULL;
+        return NATS_OK;
+    }
+
+    *dst = NATS_STRDUP(src);
+    return (*dst == NULL) ? NATS_NO_MEMORY : NATS_OK;
 }
 
 // Formats one of the SYS_SUBJ_* templates with a server ID or "PING".
@@ -208,8 +214,8 @@ _pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
 
     natsRequestManyOpts_Init(&rmOpts);
     rmOpts.Timeout = (uint64_t) timeout;
-    if (client->stallInterval > 0)
-        rmOpts.Stall = (uint64_t) client->stallInterval;
+    rmOpts.Stall   = (uint64_t) client->stallInterval;
+    // -1 is the "no limit" sentinel.
     if (client->serverCount > 0)
         rmOpts.Count = (uint64_t) client->serverCount;
 
@@ -237,6 +243,58 @@ _pingServers(natsMsgList *list, natsSysClient *client, const char *subjFmt,
 #define RESP_ERROR(r, ep)   ((natsSysAPIError *) ((char *) (r) + (ep)->ErrorOff))
 #define RESP_PAYLOAD(r, ep) ((void *) ((char *) (r) + (ep)->PayloadOff))
 
+// Initial request buffer size; every request is a small flat object, and the
+// buffer grows on its own for the rare one that is not.
+#define REQ_BUF_HINT (256)
+
+static natsStatus
+_parseServerInfo(void *dst, natsJSON *node)
+{
+    return sysclient_scanFields(dst, node, _serverInfoFields, SYS_NFIELDS(_serverInfoFields));
+}
+
+static natsStatus
+_parseAPIError(void *dst, natsJSON *node)
+{
+    return sysclient_scanFields(dst, node, _apiErrorFields, SYS_NFIELDS(_apiErrorFields));
+}
+
+// Splits a response envelope into its parts. *payload borrows a node owned by
+// 'root' and is set to NULL when the key is absent; 'server' and 'apiErr' are
+// filled in place.
+static natsStatus
+_parseEnvelope(natsSysServerInfo *server, natsSysAPIError *apiErr, natsJSON **payload,
+               natsJSON *root, const char *payloadKey)
+{
+    natsStatus s;
+    natsJSON  *node = NULL;
+
+    *payload = NULL;
+
+    if (natsJSON_Type(root) != NATS_JSON_OBJECT)
+        return NATS_INVALID_ARG;
+
+    // Absent or null leaves the zero value; a present non-object is malformed.
+    // Letting a bad "error" through would hand the caller a zeroed Error
+    // alongside NATS_OK, and the documented "check Error.Code != 0" would then
+    // clear a response the server had in fact rejected.
+    s = sysclient_objectInline(server, root, "server", _parseServerInfo);
+    IFOK(s, sysclient_objectInline(apiErr, root, "error", _parseAPIError));
+    if (s != NATS_OK)
+        return s;
+
+    // The payload is absent when the server reports an error, so a missing key
+    // is not a failure — the caller is expected to check apiErr.
+    s = natsJSON_Lookup(root, payloadKey, &node);
+    if (s == NATS_NOT_FOUND)
+        return NATS_OK;
+    if (s != NATS_OK)
+        return s;
+
+    *payload = node;
+    return NATS_OK;
+}
+
 void
 sysclient_destroyResp(void *resp, const void *epv)
 {
@@ -245,15 +303,28 @@ sysclient_destroyResp(void *resp, const void *epv)
     if ((resp == NULL) || (ep == NULL))
         return;
 
-    sysclient_freeServerInfo(RESP_SERVER(resp, ep));
-    sysclient_freeAPIError(RESP_ERROR(resp, ep));
+    sysclient_freeFields(RESP_SERVER(resp, ep), _serverInfoFields, SYS_NFIELDS(_serverInfoFields));
+    sysclient_freeFields(RESP_ERROR(resp, ep), _apiErrorFields, SYS_NFIELDS(_apiErrorFields));
     ep->FreePayload(RESP_PAYLOAD(resp, ep));
     NATS_FREE(resp);
 }
 
+// Maps an accessor-level failure onto the status the public API documents.
+//
+// A payload that is not an object, or a key holding a value of the wrong type,
+// surfaces as NATS_INVALID_ARG from the json.h accessors. Report that as
+// NATS_ERR (malformed response); NATS_INVALID_ARG stays reserved for a bad
+// argument to the natsSysClient_* call itself.
+static natsStatus
+_responseStatus(natsStatus s)
+{
+    if ((s != NATS_OK) && (s != NATS_NO_MEMORY))
+        return NATS_ERR;
+    return s;
+}
+
 // Decodes one reply into a freshly allocated, fully-owned response; *newResp
-// is NULL on error. The status is already mapped through
-// sysclient_responseStatus().
+// is NULL on error. The status is already mapped through _responseStatus().
 static natsStatus
 _respFromMsg(void **newResp, natsMsg *msg, const sysEndpoint *ep)
 {
@@ -269,8 +340,8 @@ _respFromMsg(void **newResp, natsMsg *msg, const sysEndpoint *ep)
         return NATS_NO_MEMORY;
 
     s = natsJSON_Parse(&root, natsMsg_GetData(msg), natsMsg_GetDataLength(msg));
-    IFOK(s, sysclient_parseEnvelope(RESP_SERVER(resp, ep), RESP_ERROR(resp, ep), &payload,
-                                    root, ep->PayloadKey));
+    IFOK(s, _parseEnvelope(RESP_SERVER(resp, ep), RESP_ERROR(resp, ep), &payload, root,
+                           ep->PayloadKey));
 
     // A server reporting an error sends no payload, so an absent key is not a
     // failure; the caller checks the Error member.
@@ -281,7 +352,7 @@ _respFromMsg(void **newResp, natsMsg *msg, const sysEndpoint *ep)
     // it goes first and the caller's message stays alive until after this.
     natsJSON_Destroy(root);
 
-    s = sysclient_responseStatus(s);
+    s = _responseStatus(s);
     if (s != NATS_OK)
     {
         sysclient_destroyResp(resp, ep);
@@ -305,7 +376,7 @@ sysclient_request(void **newResp, natsSysClient *client, const char *serverID,
 
     *newResp = NULL;
 
-    s = natsBuf_Init(&buf, ep->BufHint);
+    s = natsBuf_Init(&buf, REQ_BUF_HINT);
     IFOK(s, ep->Marshal(&buf, opts));
     if (s == NATS_OK)
         s = _requestByID(&reply, client, serverID, ep->Subject, natsBuf_Data(&buf),
@@ -336,7 +407,7 @@ sysclient_ping(void ***resps, int *count, natsSysClient *client, const void *opt
     *resps = NULL;
     *count = 0;
 
-    s = natsBuf_Init(&buf, ep->BufHint);
+    s = natsBuf_Init(&buf, REQ_BUF_HINT);
     IFOK(s, ep->Marshal(&buf, opts));
     if (s == NATS_OK)
         s = _pingServers(&msgs, client, ep->Subject, natsBuf_Data(&buf), natsBuf_Len(&buf),
@@ -394,46 +465,65 @@ sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *
 // Page walks.
 //
 
-// The int members a walk table locates by offset.
+// The members a walk table locates by offset.
 #define WALK_INT(base, off) (*(int *) ((char *) (base) + (off)))
+#define WALK_BOOL(base, off) (*(bool *) ((char *) (base) + (off)))
 
-// Fetches and delivers one page, advancing *offset past it. With 'refresh'
-// set, *total is re-read from the page; otherwise the caller's value stands.
-// 'stop' is set when the handler declined more, the page was empty, or the
-// reported total has been covered.
-static natsStatus
-_walkPage(natsSysClient *client, const char *serverID, const void *opts, int *offset,
-          int *total, bool refresh, int64_t deadline, sysPageHandler handler,
-          void *closure, const sysWalkOps *ops, bool *stop)
+// Whether the options ask for a paged result at all. 'opts' may be NULL,
+// meaning defaults, which never ask for one.
+static bool
+_isPaged(const sysWalkOps *ops, const void *opts)
 {
-    void      *page = NULL;
-    natsStatus s;
-    int64_t    left;
-    int        n;
-    bool       wantMore;
+    if (ops->PagedOff == SYS_ALWAYS_PAGED)
+        return true;
+    return (opts != NULL) && WALK_BOOL(opts, ops->PagedOff);
+}
 
-    left = deadline - _nowMs();
-    if (left <= 0)
-        return NATS_TIMEOUT;
+// Hands one page to the handler, releases it, and advances *offset past it.
+// With 'refresh' set, *total is re-read from the page; otherwise the caller's
+// value stands. 'stop' is set when there is nothing more to fetch: the handler
+// declined more, the page was empty, the reported total has been covered, or
+// the result is not paged at all.
+//
+// Stopping on an empty page is what keeps a shrinking result set from looping
+// forever; it is a deliberate deviation from orbit.go, whose per-server ping
+// iterators lack it.
+static void
+_deliverPage(void *page, int *offset, int *total, bool refresh, bool paged,
+             sysPageHandler handler, void *closure, const sysWalkOps *ops, bool *stop)
+{
+    int  n = WALK_INT(page, ops->CountOff);
+    bool wantMore;
 
-    // By ID, not by ping. A server that left the cluster meanwhile yields
-    // NATS_NOT_FOUND.
-    s = ops->Fetch(&page, client, serverID, opts, *offset, left);
-    if (s != NATS_OK)
-        return s;
-
-    n = WALK_INT(page, ops->CountOff);
     if (refresh)
         *total = WALK_INT(page, ops->TotalOff);
     wantMore = handler(page, closure);
     sysclient_destroyResp(page, ops->Endpoint);
 
     *offset += n;
+    *stop = (!wantMore || !paged || (n == 0) || (*offset >= *total));
+}
 
-    // Stop once the reported total is covered, and also on an empty page so a
-    // shrinking result set cannot loop forever. The latter is a deliberate
-    // deviation from orbit.go, whose per-server ping iterators lack it.
-    *stop = (!wantMore || (n == 0) || (*offset >= *total));
+// Fetches one page by ID and delivers it. A server that left the cluster
+// meanwhile yields NATS_NOT_FOUND.
+static natsStatus
+_walkPage(natsSysClient *client, const char *serverID, const void *opts, int *offset,
+          int *total, bool refresh, bool paged, int64_t deadline, sysPageHandler handler,
+          void *closure, const sysWalkOps *ops, bool *stop)
+{
+    void      *page = NULL;
+    natsStatus s;
+    int64_t    left;
+
+    left = deadline - natsSys_NowMs();
+    if (left <= 0)
+        return NATS_TIMEOUT;
+
+    s = ops->Fetch(&page, client, serverID, opts, *offset, left);
+    if (s != NATS_OK)
+        return s;
+
+    _deliverPage(page, offset, total, refresh, paged, handler, closure, ops, stop);
     return NATS_OK;
 }
 
@@ -446,9 +536,10 @@ sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts
     int64_t    deadline;
     int        offset;
     int        total = 0;
+    bool       paged;
     bool       stop  = false;
 
-    if ((client == NULL) || (handler == NULL) || (ops == NULL))
+    if ((client == NULL) || (ops == NULL))
         return NATS_INVALID_ARG;
 
     s = _checkTimeout(&timeout);
@@ -456,21 +547,16 @@ sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts
         return s;
 
     // One budget covers the whole walk, not each page.
-    deadline = _nowMs() + timeout;
+    deadline = natsSys_NowMs() + timeout;
     offset   = (opts != NULL) ? WALK_INT(opts, ops->OffsetOff) : 0;
-
-    // Without a paged result there is nothing to walk: one request, one page,
-    // and nothing left for a false return to stop.
-    if ((ops->IsPaged != NULL) && !ops->IsPaged(opts))
-        return _walkPage(client, serverID, opts, &offset, &total, false, deadline, handler,
-                         closure, ops, &stop);
+    paged    = _isPaged(ops, opts);
 
     // Each page reports the total afresh, so the stop condition is judged on
     // what the server last said.
     do
     {
-        s = _walkPage(client, serverID, opts, &offset, &total, true, deadline, handler,
-                      closure, ops, &stop);
+        s = _walkPage(client, serverID, opts, &offset, &total, true, paged, deadline,
+                      handler, closure, ops, &stop);
         if (s != NATS_OK)
             return s;
     } while (!stop);
@@ -527,7 +613,7 @@ _newWalk(sysWalk **newWalk, natsSysClient *client, const void *opts, void *page,
     // caller's own arguments. A VARZ or HEALTHZ reply without an ID is still
     // perfectly usable, which is why the check is here and not in the ping.
     id = RESP_SERVER(page, ops->Endpoint)->ID;
-    s  = nats_IsStringEmpty(id) ? NATS_ERR : sysclient_dupStr(&walk->serverID, id);
+    s  = nats_IsStringEmpty(id) ? NATS_ERR : _dupStr(&walk->serverID, id);
 
     if (s == NATS_OK)
     {
@@ -603,9 +689,10 @@ sysclient_walkRun(sysWalk *walk, int64_t timeout, sysPageHandler handler, void *
 {
     natsStatus s;
     int64_t    deadline;
+    bool       paged;
     bool       stop = false;
 
-    if ((walk == NULL) || (handler == NULL))
+    if (walk == NULL)
         return NATS_INVALID_ARG;
 
     s = _checkTimeout(&timeout);
@@ -614,101 +701,30 @@ sysclient_walkRun(sysWalk *walk, int64_t timeout, sysPageHandler handler, void *
     if (walk->done)
         return NATS_OK;
 
-    deadline = _nowMs() + timeout;
+    deadline = natsSys_NowMs() + timeout;
+    paged    = _isPaged(walk->ops, walk->opts);
 
-    // Deliver the page the ping already fetched before asking for more.
+    // Deliver the page the ping already fetched before asking for more. The
+    // total is the first page's and is never refreshed.
     if (walk->first != NULL)
     {
-        const sysWalkOps *ops  = walk->ops;
-        void             *page = walk->first;
-        int               n    = WALK_INT(page, ops->CountOff);
-        bool              wantMore;
+        void *page = walk->first;
 
         walk->first = NULL;
-        wantMore    = handler(page, closure);
-        sysclient_destroyResp(page, ops->Endpoint);
-
-        walk->offset += n;
-
-        stop = (!wantMore || (n == 0) || (walk->offset >= walk->total)
-                || ((ops->IsPaged != NULL) && !ops->IsPaged(walk->opts)));
+        _deliverPage(page, &walk->offset, &walk->total, false, paged, handler, closure,
+                     walk->ops, &stop);
     }
 
-    // The total is the first page's and is never refreshed.
     while (!stop)
     {
         s = _walkPage(walk->client, walk->serverID, walk->opts, &walk->offset, &walk->total,
-                      false, deadline, handler, closure, walk->ops, &stop);
+                      false, paged, deadline, handler, closure, walk->ops, &stop);
         if (s != NATS_OK)
             return s;
     }
 
     walk->done = true;
     return NATS_OK;
-}
-
-static natsStatus
-_parseServerInfo(void *dst, natsJSON *node)
-{
-    return sysclient_scanFields(dst, node, _serverInfoFields, SYS_NFIELDS(_serverInfoFields));
-}
-
-static natsStatus
-_parseAPIError(void *dst, natsJSON *node)
-{
-    return sysclient_scanFields(dst, node, _apiErrorFields, SYS_NFIELDS(_apiErrorFields));
-}
-
-natsStatus
-sysclient_parseEnvelope(natsSysServerInfo *server, natsSysAPIError *apiErr,
-                        natsJSON **payload, natsJSON *root, const char *payloadKey)
-{
-    natsStatus s;
-    natsJSON  *node = NULL;
-
-    if ((server == NULL) || (apiErr == NULL) || (payload == NULL) || (root == NULL)
-        || (payloadKey == NULL))
-        return NATS_INVALID_ARG;
-
-    *payload = NULL;
-
-    if (natsJSON_Type(root) != NATS_JSON_OBJECT)
-        return NATS_INVALID_ARG;
-
-    // Absent or null leaves the zero value; a present non-object is malformed.
-    // Letting a bad "error" through would hand the caller a zeroed Error
-    // alongside NATS_OK, and the documented "check Error.Code != 0" would then
-    // clear a response the server had in fact rejected.
-    s = sysclient_objectInline(server, root, "server", _parseServerInfo);
-    IFOK(s, sysclient_objectInline(apiErr, root, "error", _parseAPIError));
-    if (s != NATS_OK)
-        return s;
-
-    // The payload is absent when the server reports an error, so a missing key
-    // is not a failure — the caller is expected to check apiErr.
-    node = NULL;
-    s    = natsJSON_Field(root, payloadKey, &node);
-    if (s == NATS_NOT_FOUND)
-        return NATS_OK;
-    if (s != NATS_OK)
-        return s;
-    if (natsJSON_Type(node) == NATS_JSON_NULL)
-        return NATS_OK;
-
-    *payload = node;
-    return NATS_OK;
-}
-
-void
-sysclient_freeServerInfo(natsSysServerInfo *server)
-{
-    sysclient_freeFields(server, _serverInfoFields, SYS_NFIELDS(_serverInfoFields));
-}
-
-void
-sysclient_freeAPIError(natsSysAPIError *apiErr)
-{
-    sysclient_freeFields(apiErr, _apiErrorFields, SYS_NFIELDS(_apiErrorFields));
 }
 
 //
@@ -895,22 +911,6 @@ sysclient_freeJetStreamVarz(void *dst)
 // Option copying.
 //
 
-natsStatus
-sysclient_dupStr(char **dst, const char *src)
-{
-    if (dst == NULL)
-        return NATS_INVALID_ARG;
-
-    if (src == NULL)
-    {
-        *dst = NULL;
-        return NATS_OK;
-    }
-
-    *dst = NATS_STRDUP(src);
-    return (*dst == NULL) ? NATS_NO_MEMORY : NATS_OK;
-}
-
 // Local to the event filter, the only option member that is a string array.
 static natsStatus
 _dupOptStrArray(const char ***dst, int *dstCount, const char *const *src, int count)
@@ -935,16 +935,10 @@ _dupOptStrArray(const char ***dst, int *dstCount, const char *const *src, int co
     // these options, and sysclient_optStrArray rejects it there.
     for (i = 0; i < count; i++)
     {
-        if (src[i] == NULL)
-            continue;
         arr[i] = NATS_STRDUP(src[i]);
         if (arr[i] == NULL)
         {
-            int j;
-
-            for (j = 0; j < i; j++)
-                NATS_FREE((char *) arr[j]);
-            NATS_FREE(arr);
+            sysclient_freeStrArray((char ***) &arr, &i);
             return NATS_NO_MEMORY;
         }
     }
@@ -957,7 +951,9 @@ _dupOptStrArray(const char ***dst, int *dstCount, const char *const *src, int co
 natsStatus
 sysclient_dupOptStr(const char **dst, const char *src)
 {
-    return sysclient_dupStr((char **) dst, src);
+    if (dst == NULL)
+        return NATS_INVALID_ARG;
+    return _dupStr((char **) dst, src);
 }
 
 void
@@ -1144,9 +1140,8 @@ natsSysTime_Parse(int64_t *unixNanos, const char *rfc3339)
     secs = days * 86400 + hour * 3600 + min * 60 + sec - offsetSec;
 
     // Reject what int64 nanoseconds cannot hold, rather than overflowing into a
-    // plausible-looking wrong answer. This is the same window Go documents for
-    // time.Time.UnixNano(), and the boundary is real: a JetStream stream that
-    // has never been written reports "0001-01-01T00:00:00Z" for first_ts and
+    // plausible-looking wrong answer. The boundary is real: a JetStream stream
+    // that has never been written reports "0001-01-01T00:00:00Z" for first_ts and
     // last_ts, which is 24 orders of magnitude outside it.
     // nanos is always >= 0, so it can only push the result up.
     if ((secs > (INT64_MAX - nanos) / 1000000000LL)

@@ -94,7 +94,13 @@ typedef struct __natsSysConnInfo
     char    *RTT;          ///< Last measured round trip, as the server's own string.
     char    *Uptime;       ///< Connection age, as the server's own string.
     char    *Idle;         ///< Idle time, as the server's own string.
-    int64_t  Pending;      ///< Bytes waiting to be written (wire key `pending_bytes`).
+    /** \brief Bytes waiting to be written (wire key `pending_bytes`).
+     *
+     * orbit.go declares this `int`, which is 64-bit on every platform the
+     * server runs on, and a backlog above 2GB is reachable, so it is widened
+     * here rather than mapped to C's 32-bit `int` like the other `int` fields.
+     */
+    int64_t  Pending;
     int64_t  InMsgs;       ///< Messages received from this connection.
     int64_t  OutMsgs;      ///< Messages sent to this connection.
     int64_t  InBytes;      ///< Bytes received from this connection.
@@ -241,7 +247,8 @@ natsSysConnzOptions_Init(natsSysConnzOptions *opts);
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response.
+ * did not answer in time, #NATS_ERR for a malformed response,
+ * #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Connz(natsSysConnzResp **newResp, natsSysClient *client,
@@ -301,7 +308,8 @@ natsSysClient_ConnzEach(natsSysClient *client, const char *serverID,
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NO_RESPONDERS when nothing is listening on the system subject,
- * #NATS_ERR for a malformed response.
+ * #NATS_ERR for a malformed response, #NATS_NO_MEMORY on allocation
+ * failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_ConnzPingEach(natsSysConnzWalkList *list, natsSysClient *client,

@@ -117,10 +117,14 @@ _marshalOptions(natsBuffer *buf, const void *optsv)
     return natsJSONWriter_Status(&w);
 }
 
+// Deep-copies 'src' (NULL meaning defaults) into the zeroed 'dst'; a
+// sysWalkOps.CopyOptions.
 static natsStatus
-_copyOptions(natsSysConnzOptions *dst, const natsSysConnzOptions *src)
+_copyOptions(void *dstv, const void *srcv)
 {
-    natsStatus s = NATS_OK;
+    natsSysConnzOptions       *dst = (natsSysConnzOptions *) dstv;
+    const natsSysConnzOptions *src = (const natsSysConnzOptions *) srcv;
+    natsStatus s   = NATS_OK;
 
     if (src == NULL)
         return natsSysConnzOptions_Init(dst);
@@ -147,9 +151,12 @@ _copyOptions(natsSysConnzOptions *dst, const natsSysConnzOptions *src)
     return s;
 }
 
+// Releases the members of an options copy; a sysWalkOps.FreeOptions.
 static void
-_freeOptionsCopy(natsSysConnzOptions *opts)
+_freeOptionsCopy(void *optsv)
 {
+    natsSysConnzOptions *opts = (natsSysConnzOptions *) optsv;
+
     if (opts == NULL)
         return;
 
@@ -226,7 +233,7 @@ _freeConnz(void *dst)
     sysclient_freePtrArray((void ***) &connz->Conns, &connz->ConnsCount, _freeConnInfo);
 }
 
-static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysConnzResp, Connz, SYS_SUBJ_CONNZ, "data", 256,
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysConnzResp, Connz, SYS_SUBJ_CONNZ, "data",
                                                   _marshalOptions, _parseConnz, _freeConnz);
 
 natsStatus
@@ -268,18 +275,6 @@ natsSysConnzRespList_Destroy(natsSysConnzRespList *list)
 // Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
 //
 
-static natsStatus
-_copyOptionsV(void *dst, const void *src)
-{
-    return _copyOptions((natsSysConnzOptions *) dst, (const natsSysConnzOptions *) src);
-}
-
-static void
-_freeOptionsV(void *opts)
-{
-    _freeOptionsCopy((natsSysConnzOptions *) opts);
-}
-
 // The options are borrowed, so the offset is advanced on a shallow copy. Only
 // scalars differ between pages, and the copy lives no longer than this call.
 static natsStatus
@@ -303,10 +298,10 @@ static const sysWalkOps _walkOps = {
     SYS_INT_OFF(natsSysConnzOptions, Offset),
     SYS_INT_OFF(natsSysConnzResp, Connz.ConnsCount),
     SYS_INT_OFF(natsSysConnzResp, Connz.Total),
-    _copyOptionsV,
-    _freeOptionsV,
+    _copyOptions,
+    _freeOptionsCopy,
     _fetch,
-    NULL,
+    SYS_ALWAYS_PAGED,
 };
 
 SYS_WALK_SINK(natsSysConnzPageHandler, natsSysConnzResp)

@@ -77,6 +77,12 @@ may be run concurrently from separate threads.
 
 # Quick Start
 
+The headers install under `include/nats-sysclient/`, one level down from the
+other orbit.c sub-libraries, because names like `varz.h` and `connz.h` are
+likely to collide with something else in an installed prefix. Installed code
+includes them as below; the in-tree examples and tests put `src/` on the
+include path and include `"sysclient.h"` directly.
+
 ```c
 #include <nats-sysclient/sysclient.h>
 #include <nats-sysclient/healthz.h>
@@ -166,8 +172,7 @@ than yielding a partial result.
 
 `natsSysTime_Parse` converts the RFC 3339 text the server sends into Unix
 nanoseconds. It rejects anything outside **1677-09-21 … 2262-04-11**, the range
-`int64` nanoseconds can represent — the same window Go documents for
-`time.Time.UnixNano()`. That boundary is reachable from real data: a JetStream
+`int64` nanoseconds can represent. That boundary is reachable from real data: a JetStream
 stream that has never been written reports `0001-01-01T00:00:00Z` for
 `first_ts` and `last_ts`.
 
@@ -216,13 +221,12 @@ Go quirks are reproduced faithfully; where the C API departs, here is why.
   orbit.go with nats.go's JetStream structures. cnats declares equivalents
   (`jsStreamConfig` and friends) but exposes no public JSON unmarshaller for
   them, so they arrive as `ClusterJSON`, `ConfigJSON`, `StateJSON`,
-  `ConsumerJSON`, `MirrorJSON` and `SourcesJSON`. Nothing is dropped; numbers
-  round-trip exactly and strings are re-escaped.
+  `ConsumerJSON`, `MirrorJSON` and `SourcesJSON`. Nothing is dropped: each is
+  the text the server sent, copied verbatim.
 - **Only `natsSysJszOptions.Accounts` enables JSZ pagination.** The server
   treats `Streams` and `Consumer` as implying it, so a request carrying only
   those still returns account details — but a walk fetches one page of them and
-  stops, exactly as orbit.go's `AllJsz`/`AllJszPing` do. Set `Accounts`
-  explicitly whenever you walk.
+  stops. Set `Accounts` explicitly whenever you walk.
 - **`JSZ` has no `Total`.** Its pagination total is the account count in the
   flattened stats, `JSInfo.JetStreamStats.Accounts`, and pagination applies
   only when `Accounts` is set — without it a walk yields exactly one page.

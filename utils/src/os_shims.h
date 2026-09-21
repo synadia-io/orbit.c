@@ -57,6 +57,14 @@ typedef pthread_once_t natsSysOnce;
 
 #define nats_IsStringEmpty(s) ((((s) == NULL) || ((s)[0] == '\0')) ? true : false)
 
+// Milliseconds from the monotonic clock, for deadlines computed as
+// now + timeout and compared against later readings.
+static inline int64_t
+natsSys_NowMs(void)
+{
+    return nats_NowMonotonicInNanoSeconds() / 1000000;
+}
+
 // Returns the current user's home directory as an allocated string.
 natsStatus natsSys_GetHomeDir(char **homeDir);
 

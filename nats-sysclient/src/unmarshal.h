@@ -16,7 +16,7 @@
 // The responses model ~52 structs and ~364 wire fields. Written as a flat
 // chain of accessor calls that is several thousand lines nobody can review;
 // written as a table it is one row per wire field, so the whole set can be
-// read off against the Go source without following any parsing logic.
+// read off against the wire format without following any parsing logic.
 //
 // Scalar, string and string-array fields go through sysclient_scanFields();
 // nested objects and object arrays need a few lines of glue per struct.
@@ -33,7 +33,7 @@ typedef enum
 {
     SYS_FLD_STR = 0,  ///< char *
     SYS_FLD_STRARRAY, ///< char ** plus an int count
-    SYS_FLD_RAWJSON,  ///< char * holding the subtree re-serialized
+    SYS_FLD_RAWJSON,  ///< char * holding the subtree's input text, verbatim
     SYS_FLD_BOOL,     ///< bool
     SYS_FLD_DOUBLE,   ///< double
     SYS_FLD_INT,      ///< int
@@ -78,8 +78,8 @@ typedef struct
 // It is a width check, not a type check: kinds of equal width are
 // interchangeable as far as this can tell, so on LP64 it will not catch
 // SYS_FLD_STR on an int64_t member or SYS_FLD_I32 on a uint32_t one. C99 has no
-// _Generic to close that gap, and nothing checks a row against its Go
-// counterpart either -- that mapping is maintained by hand.
+// _Generic to close that gap, and nothing checks a row against the wire
+// format either -- that mapping is maintained by hand.
 #define SYS_WCHECK(kind, st, fld) \
     (0 * (int) sizeof(char[(sizeof(((st *) 0)->fld) == SYS_W_##kind) ? 1 : -1]))
 
@@ -98,7 +98,7 @@ typedef struct
 // rather than copied (natsJSON_TakeStr), so a key is decoded once: a second
 // scan of the same key on the same node finds it null. A key that is missing or JSON null leaves
 // the member at its zero value. A key present with the wrong type returns
-// NATS_INVALID_ARG; callers map that through sysclient_responseStatus().
+// NATS_INVALID_ARG; the reply decoder in sysclient.c reports that as NATS_ERR.
 //
 // A row whose member width disagrees with its kind cannot reach here: SYS_F
 // rejects it at compile time.
@@ -112,13 +112,6 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n);
 void
 sysclient_freeFields(void *dst, const sysField *fields, int n);
 
-// Copies the input text of the value at 'key' into a freshly allocated string,
-// verbatim (natsJSON_Raw). Sets *out to NULL when the key is absent or null.
-// Used for subtrees that have no portable C representation — see the JSZ and
-// VARZ headers.
-natsStatus
-sysclient_rawJSONField(char **out, natsJSON *obj, const char *key);
-
 /** Parses one element of an object array into a zeroed 'elem'. */
 typedef natsStatus (*sysParseFn)(void *elem, natsJSON *node);
 
@@ -127,8 +120,8 @@ typedef void (*sysFreeFn)(void *elem);
 
 // Decodes the array of objects at 'key' into a freshly allocated contiguous
 // block of 'count' elements, each 'elemSize' bytes and zeroed before 'parse'
-// runs. A missing, null or empty array leaves *out NULL and *count 0, which is
-// an absent array behaves.
+// runs. A missing, null or empty array leaves *out NULL and *count 0, so an
+// empty array is indistinguishable from an absent one.
 //
 // On failure every element parsed so far is released with 'freeElem' and the
 // block is freed, so the caller never sees a half-built array.
@@ -142,6 +135,7 @@ sysclient_freeValueArray(void **arr, int *count, size_t elemSize, sysFreeFn free
 
 // As sysclient_valueArray(), but allocates each element separately and stores
 // an array of pointers, for payload arrays whose elements are held by pointer.
+// A NULL 'freeElem' means the elements have no members of their own.
 natsStatus
 sysclient_ptrArray(void ***out, int *count, natsJSON *obj, const char *key,
                    size_t elemSize, sysParseFn parse, sysFreeFn freeElem);
@@ -169,7 +163,8 @@ sysclient_freeObjectPtr(void **out, sysFreeFn freeElem);
 natsStatus
 sysclient_rawJSONArray(char ***out, int *count, natsJSON *obj, const char *key);
 
-// Releases an array of strings and zeroes both out-params. Pairs with
+// Releases an array of strings and zeroes both out-params: a pointer array
+// whose elements need no cleanup of their own. Pairs with
 // sysclient_rawJSONArray, and is also used for the string arrays copied out of
 // caller options.
 void

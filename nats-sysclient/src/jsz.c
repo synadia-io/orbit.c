@@ -95,10 +95,14 @@ _marshalOptions(natsBuffer *buf, const void *optsv)
     return natsJSONWriter_Status(&w);
 }
 
+// Deep-copies 'src' (NULL meaning defaults) into the zeroed 'dst'; a
+// sysWalkOps.CopyOptions.
 static natsStatus
-_copyOptions(natsSysJszOptions *dst, const natsSysJszOptions *src)
+_copyOptions(void *dstv, const void *srcv)
 {
-    natsStatus s = NATS_OK;
+    natsSysJszOptions       *dst = (natsSysJszOptions *) dstv;
+    const natsSysJszOptions *src = (const natsSysJszOptions *) srcv;
+    natsStatus s   = NATS_OK;
 
     if (src == NULL)
         return natsSysJszOptions_Init(dst);
@@ -117,9 +121,12 @@ _copyOptions(natsSysJszOptions *dst, const natsSysJszOptions *src)
     return s;
 }
 
+// Releases the members of an options copy; a sysWalkOps.FreeOptions.
 static void
-_freeOptionsCopy(natsSysJszOptions *opts)
+_freeOptionsCopy(void *optsv)
 {
+    natsSysJszOptions *opts = (natsSysJszOptions *) optsv;
+
     if (opts == NULL)
         return;
 
@@ -234,7 +241,7 @@ _freeJSInfo(void *dst)
                            _freeAccountDetail);
 }
 
-static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysJszResp, JSInfo, SYS_SUBJ_JSZ, "data", 128,
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysJszResp, JSInfo, SYS_SUBJ_JSZ, "data",
                                                   _marshalOptions, _parseJSInfo, _freeJSInfo);
 
 natsStatus
@@ -276,18 +283,6 @@ natsSysJszRespList_Destroy(natsSysJszRespList *list)
 // Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
 //
 
-static natsStatus
-_copyOptionsV(void *dst, const void *src)
-{
-    return _copyOptions((natsSysJszOptions *) dst, (const natsSysJszOptions *) src);
-}
-
-static void
-_freeOptionsV(void *opts)
-{
-    _freeOptionsCopy((natsSysJszOptions *) opts);
-}
-
 // The options are borrowed, so the offset is advanced on a shallow copy. Only
 // scalars differ between pages, and the copy lives no longer than this call.
 static natsStatus
@@ -305,24 +300,16 @@ _fetch(void **page, natsSysClient *client, const char *serverID, const void *opt
     return natsSysClient_Jsz((natsSysJszResp **) page, client, serverID, &pageOpts, timeout);
 }
 
-static bool
-_isPaged(const void *optsv)
-{
-    const natsSysJszOptions *opts = (const natsSysJszOptions *) optsv;
-
-    return (opts != NULL) && opts->Accounts;
-}
-
 static const sysWalkOps _walkOps = {
     &_endpoint,
     sizeof(natsSysJszOptions),
     SYS_INT_OFF(natsSysJszOptions, Offset),
     SYS_INT_OFF(natsSysJszResp, JSInfo.AccountDetailsCount),
     SYS_INT_OFF(natsSysJszResp, JSInfo.JetStreamStats.Accounts),
-    _copyOptionsV,
-    _freeOptionsV,
+    _copyOptions,
+    _freeOptionsCopy,
     _fetch,
-    _isPaged,
+    SYS_BOOL_OFF(natsSysJszOptions, Accounts),
 };
 
 SYS_WALK_SINK(natsSysJszPageHandler, natsSysJszResp)

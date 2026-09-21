@@ -76,10 +76,14 @@ _marshalOptions(natsBuffer *buf, const void *optsv)
     return natsJSONWriter_Status(&w);
 }
 
+// Deep-copies 'src' (NULL meaning defaults) into the zeroed 'dst'; a
+// sysWalkOps.CopyOptions.
 static natsStatus
-_copyOptions(natsSysSubszOptions *dst, const natsSysSubszOptions *src)
+_copyOptions(void *dstv, const void *srcv)
 {
-    natsStatus s = NATS_OK;
+    natsSysSubszOptions       *dst = (natsSysSubszOptions *) dstv;
+    const natsSysSubszOptions *src = (const natsSysSubszOptions *) srcv;
+    natsStatus s   = NATS_OK;
 
     if (src == NULL)
         return natsSysSubszOptions_Init(dst);
@@ -98,9 +102,12 @@ _copyOptions(natsSysSubszOptions *dst, const natsSysSubszOptions *src)
     return s;
 }
 
+// Releases the members of an options copy; a sysWalkOps.FreeOptions.
 static void
-_freeOptionsCopy(natsSysSubszOptions *opts)
+_freeOptionsCopy(void *optsv)
 {
+    natsSysSubszOptions *opts = (natsSysSubszOptions *) optsv;
+
     if (opts == NULL)
         return;
 
@@ -120,8 +127,7 @@ _hasSublistStats(natsJSON *node)
 
     for (i = 0; i < SYS_NFIELDS(_sublistStatsFields); i++)
     {
-        if ((natsJSON_Field(node, _sublistStatsFields[i].Key, &field) == NATS_OK)
-            && (natsJSON_Type(field) != NATS_JSON_NULL))
+        if (natsJSON_Lookup(node, _sublistStatsFields[i].Key, &field) == NATS_OK)
             return true;
     }
     return false;
@@ -172,7 +178,7 @@ _freeSubsz(void *dst)
     subsz->SublistStats = NULL;
 }
 
-static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysSubszResp, Subsz, SYS_SUBJ_SUBSZ, "data", 128,
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysSubszResp, Subsz, SYS_SUBJ_SUBSZ, "data",
                                                   _marshalOptions, _parseSubsz, _freeSubsz);
 
 natsStatus
@@ -214,18 +220,6 @@ natsSysSubszRespList_Destroy(natsSysSubszRespList *list)
 // Walk adapters: the typed reads the shared driver in sysclient.c cannot do.
 //
 
-static natsStatus
-_copyOptionsV(void *dst, const void *src)
-{
-    return _copyOptions((natsSysSubszOptions *) dst, (const natsSysSubszOptions *) src);
-}
-
-static void
-_freeOptionsV(void *opts)
-{
-    _freeOptionsCopy((natsSysSubszOptions *) opts);
-}
-
 // The options are borrowed, so the offset is advanced on a shallow copy. Only
 // scalars differ between pages, and the copy lives no longer than this call.
 static natsStatus
@@ -249,10 +243,10 @@ static const sysWalkOps _walkOps = {
     SYS_INT_OFF(natsSysSubszOptions, Offset),
     SYS_INT_OFF(natsSysSubszResp, Subsz.SubsCount),
     SYS_INT_OFF(natsSysSubszResp, Subsz.Total),
-    _copyOptionsV,
-    _freeOptionsV,
+    _copyOptions,
+    _freeOptionsCopy,
     _fetch,
-    NULL,
+    SYS_ALWAYS_PAGED,
 };
 
 SYS_WALK_SINK(natsSysSubszPageHandler, natsSysSubszResp)

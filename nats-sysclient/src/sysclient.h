@@ -130,7 +130,8 @@ typedef struct __natsSysAPIError
  *
  * Every field is optional; a zero-valued field is left out of the request.
  * These keys are flattened into the request object rather than nested. VARZ,
- * STATSZ, CONNZ and JSZ carry this filter; SUBSZ has none.
+ * STATSZ, CONNZ and JSZ carry this filter; SUBSZ does not, although the
+ * server would accept it.
  */
 typedef struct __natsSysEventFilterOptions
 {
@@ -326,8 +327,7 @@ natsSysClient_Destroy(natsSysClient *client);
  * @param rfc3339 the timestamp text, as found in e.g. #natsSysServerInfo.Time.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for `NULL` arguments, text
  * that is not a valid RFC 3339 timestamp, or a timestamp outside
- * 1677-09-21 … 2262-04-11 — the range `int64` nanoseconds can represent, the
- * same window Go documents for `time.Time.UnixNano()`.
+ * 1677-09-21 … 2262-04-11, the range `int64` nanoseconds can represent.
  *
  * \note That last case is reachable from real data and shares its status with
  * malformed text: a JetStream stream that has never been written reports

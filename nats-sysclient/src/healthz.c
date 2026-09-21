@@ -102,7 +102,7 @@ _freeHealthz(void *dst)
                              sizeof(natsSysHealthzError), _freeHealthzError);
 }
 
-static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysHealthzResp, Healthz, SYS_SUBJ_HEALTHZ, "data", 64,
+static const sysEndpoint _endpoint = SYS_ENDPOINT(natsSysHealthzResp, Healthz, SYS_SUBJ_HEALTHZ, "data",
                                                   _marshalOptions, _parseHealthz, _freeHealthz);
 
 natsStatus

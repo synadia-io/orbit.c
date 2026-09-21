@@ -30,8 +30,9 @@ extern "C" {
  *
  * This endpoint paginates; use #natsSysClient_SubszEach to walk every page.
  *
- * \note SUBSZ is the one endpoint with no server filter: there is no way to
- * select servers by name, cluster, host, tags or domain.
+ * \note SUBSZ is the one endpoint whose options carry no server filter, so
+ * a ping cannot select servers by name, cluster, host, tags or domain. The
+ * server itself would accept one; the options here do not model it.
  *
  * \warning Paging this endpoint can miss subscriptions and repeat others.
  * nats-server pages by offset over a sublist with no stable ordering
@@ -161,7 +162,8 @@ natsSysSubszOptions_Init(natsSysSubszOptions *opts);
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response.
+ * did not answer in time, #NATS_ERR for a malformed response,
+ * #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Subsz(natsSysSubszResp **newResp, natsSysClient *client,

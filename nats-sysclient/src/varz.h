@@ -280,9 +280,9 @@ typedef struct __natsSysVarz
      *
      * Each element is a full JWT claims tree. orbit.c ships no JWT claims
      * model and cnats exposes none, so rather than drop the data or decode
-     * part of it, each element is carried as the JSON text the server sent.
-     * Parse it with any JSON reader; numbers survive the round trip exactly
-     * and strings are re-escaped.
+     * part of it, each element is carried verbatim as the JSON text the
+     * server sent, whitespace included, so nothing is lost. Parse it with
+     * any JSON reader.
      */
     char **TrustedOperatorsClaimJSON;
     int    TrustedOperatorsClaimJSONCount; ///< Number of entries above.
@@ -345,7 +345,8 @@ natsSysVarzOptions_Init(natsSysVarzOptions *opts);
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response.
+ * did not answer in time, #NATS_ERR for a malformed response,
+ * #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Varz(natsSysVarzResp **newResp, natsSysClient *client,
@@ -366,7 +367,8 @@ natsSysClient_Varz(natsSysVarzResp **newResp, natsSysClient *client,
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NO_RESPONDERS when nothing is listening on the system subject,
- * #NATS_ERR for a malformed response.
+ * #NATS_ERR for a malformed response, #NATS_NO_MEMORY on allocation
+ * failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_VarzPing(natsSysVarzRespList *list, natsSysClient *client,

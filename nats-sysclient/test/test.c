@@ -146,6 +146,75 @@ _stopAllServers(void)
         _stopServer(g_serverPids[0]);
 }
 
+// Connections and clients a test has open, so main() can release them when a
+// testCond bail-out skips the test's own teardown, the same way g_serverPids
+// covers the servers it started. SETUP/TEARDOWN and the cluster helpers
+// register on creation and forget on destroy.
+
+#define MAX_HANDLES (16)
+
+static natsConnection *g_conns[MAX_HANDLES];
+static int             g_connCount = 0;
+static natsSysClient  *g_clients[MAX_HANDLES];
+static int             g_clientCount = 0;
+
+static void
+_rememberConn(natsConnection *nc)
+{
+    if ((nc != NULL) && (g_connCount < MAX_HANDLES))
+        g_conns[g_connCount++] = nc;
+}
+
+static void
+_rememberClient(natsSysClient *sys)
+{
+    if ((sys != NULL) && (g_clientCount < MAX_HANDLES))
+        g_clients[g_clientCount++] = sys;
+}
+
+// Destroys a connection and drops it from the registry; NULL is a no-op.
+static void
+_destroyConn(natsConnection *nc)
+{
+    int i;
+
+    for (i = 0; i < g_connCount; i++)
+    {
+        if (g_conns[i] == nc)
+        {
+            g_conns[i] = g_conns[--g_connCount];
+            break;
+        }
+    }
+    natsConnection_Destroy(nc);
+}
+
+static void
+_destroyClient(natsSysClient *sys)
+{
+    int i;
+
+    for (i = 0; i < g_clientCount; i++)
+    {
+        if (g_clients[i] == sys)
+        {
+            g_clients[i] = g_clients[--g_clientCount];
+            break;
+        }
+    }
+    natsSysClient_Destroy(sys);
+}
+
+// Clients first: they borrow their connection.
+static void
+_destroyRememberedHandles(void)
+{
+    while (g_clientCount > 0)
+        _destroyClient(g_clients[0]);
+    while (g_connCount > 0)
+        _destroyConn(g_conns[0]);
+}
+
 static int64_t
 _nowMs(void)
 {
@@ -381,15 +450,17 @@ _healthzResponder(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void 
                                                                  \
     test("Connect: ");                                           \
     s = natsConnection_ConnectTo(&nc, TEST_URL);                 \
+    _rememberConn(nc);                                           \
     testCond(s == NATS_OK);                                      \
                                                                  \
     test("Create client: ");                                     \
     s = natsSysClient_Create(&sys, nc, NULL);                    \
+    _rememberClient(sys);                                        \
     testCond(s == NATS_OK)
 
-#define TEARDOWN                    \
-    natsSysClient_Destroy(sys);     \
-    natsConnection_Destroy(nc);     \
+#define TEARDOWN         \
+    _destroyClient(sys); \
+    _destroyConn(nc);    \
     _stopServer(pid)
 
 void
@@ -486,9 +557,9 @@ test_TimeParse(void)
     testCond((natsSysTime_Parse(&ns, "1969-12-31T23:00:00-01:00") == NATS_OK) && (ns == 0));
 
     test("A timestamp int64 nanoseconds cannot hold is rejected: ");
-    // Go documents the same window for time.Time.UnixNano(). The low end is
-    // reachable from real data: a JetStream stream that has never been written
-    // reports "0001-01-01T00:00:00Z" for first_ts and last_ts.
+    // The low end is reachable from real data: a JetStream stream that has
+    // never been written reports "0001-01-01T00:00:00Z" for first_ts and
+    // last_ts.
     testCond((natsSysTime_Parse(&ns, "0001-01-01T00:00:00Z") == NATS_INVALID_ARG)
              && (natsSysTime_Parse(&ns, "9999-12-31T23:59:59Z") == NATS_INVALID_ARG));
 
@@ -867,7 +938,7 @@ test_EnvelopeEdges(void)
 }
 
 // Numbers the target member cannot represent are a malformed response, not a
-// silent truncation. Go rejects each of these.
+// silent truncation.
 void
 test_FieldRanges(void)
 {
@@ -896,6 +967,17 @@ test_FieldRanges(void)
 
     test("A negative value in an unsigned field is rejected, not wrapped: ");
     fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"total_connections\":-1}}";
+    s        = natsSysClient_Varz(&varz, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_ERR) && (varz == NULL));
+
+    // Rather than reading the literal up to the 'e' and storing 1.
+    test("An exponent literal in an integer field is rejected, not truncated: ");
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"total_connections\":1e3}}";
+    s        = natsSysClient_Varz(&varz, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_ERR) && (varz == NULL));
+
+    test("A fractional literal in an integer field is rejected: ");
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"port\":42.0}}";
     s        = natsSysClient_Varz(&varz, sys, "SRV1", NULL, 2000);
     testCond((s == NATS_ERR) && (varz == NULL));
 
@@ -2975,16 +3057,18 @@ test_JszPingEach(void)
                                                            \
     test("Connect on the system account: ");               \
     s = natsConnection_ConnectTo(&nc, SYS_URL);            \
+    _rememberConn(nc);                                     \
     testCond(s == NATS_OK);                                \
                                                            \
     test("Create client: ");                               \
     s = natsSysClient_Create(&sys, nc, NULL);              \
+    _rememberClient(sys);                                  \
     testCond(s == NATS_OK)
 
-#define TEARDOWN_SYS(file)      \
-    natsSysClient_Destroy(sys); \
-    natsConnection_Destroy(nc); \
-    _stopServer(pid);           \
+#define TEARDOWN_SYS(file) \
+    _destroyClient(sys);   \
+    _destroyConn(nc);      \
+    _stopServer(pid);      \
     remove(file)
 
 static const char *SYS_CONF =
@@ -3364,7 +3448,7 @@ test_JszRealServer(void)
 #define CLUSTER_SIZE (3)
 
 // A private port range, so this suite can run beside a developer's own server
-// or the Go suite, which hard-codes 4223/5223/6223.
+// on 4222 or a cluster on the conventional 4223/5223/6223.
 #define CLU_CLIENT_PORT(i) (4322 + (i))
 #define CLU_ROUTE_PORT(i)  (4422 + (i))
 
@@ -3483,8 +3567,10 @@ _startCluster(cluster *c, bool jetstream)
     s = _waitForServer(url, 5000);
     if (s == NATS_OK)
         s = natsConnection_ConnectTo(&c->nc, url);
+    _rememberConn(c->nc);
     if (s == NATS_OK)
         s = natsSysClient_Create(&c->sys, c->nc, NULL);
+    _rememberClient(c->sys);
     if (s == NATS_OK)
     {
         natsSysClientOpts opts;
@@ -3492,6 +3578,7 @@ _startCluster(cluster *c, bool jetstream)
         natsSysClientOpts_Init(&opts);
         opts.ServerCount = CLUSTER_SIZE;
         s                = natsSysClient_Create(&c->poll, c->nc, &opts);
+        _rememberClient(c->poll);
     }
     return s;
 }
@@ -3501,9 +3588,9 @@ _stopCluster(cluster *c)
 {
     int i;
 
-    natsSysClient_Destroy(c->poll);
-    natsSysClient_Destroy(c->sys);
-    natsConnection_Destroy(c->nc);
+    _destroyClient(c->poll);
+    _destroyClient(c->sys);
+    _destroyConn(c->nc);
     for (i = 0; i < CLUSTER_SIZE; i++)
     {
         _stopServer(c->pids[i]);
@@ -3660,7 +3747,7 @@ _idsAreDistinct(const char *ids[], int count)
 void
 test_ClusterPing(void)
 {
-    cluster                c;
+    cluster c;
     natsStatus             s;
     natsSysVarzRespList    varzes   = {NULL, 0};
     natsSysStatszRespList  statszes = {NULL, 0};
@@ -3834,7 +3921,7 @@ test_ClusterPing(void)
 void
 test_ClusterConnzPingEach(void)
 {
-    cluster              c;
+    cluster c;
     natsStatus           s;
     natsConnection      *extras[CLU_CONNS_N1 + CLU_CONNS_N2 + CLU_CONNS_N3];
     natsSysConnzWalkList walks = {NULL, 0};
@@ -3949,7 +4036,7 @@ test_ClusterConnzPingEach(void)
 void
 test_ClusterSubszPingEach(void)
 {
-    cluster              c;
+    cluster c;
     natsStatus           s;
     natsConnection      *conns[CLUSTER_SIZE];
     natsSubscription    *subs[CLU_SUBS_N1 + CLU_SUBS_N2 + CLU_SUBS_N3];
@@ -4036,9 +4123,9 @@ test_ClusterSubszPingEach(void)
     // over a sublist with no stable order, so entries are skipped and others
     // repeated while the per-page counts stay consistent. Measured on
     // v2.14.0-RC.1: of seven subscriptions on one node, a limit-2 walk
-    // returned one of them twice and three of them not at all. This is the
-    // bug the Go suite skips its pagination tests for; nothing above can be
-    // tightened until the server is fixed, so completeness is checked below
+    // returned one of them twice and three of them not at all. Nothing above
+    // can be tightened until the server is fixed, so completeness is checked
+    // below
     // without pagination instead.
     test("An unpaginated ping reports each node's subscriptions exactly once: ");
     natsSysSubszOptions_Init(&opts);
@@ -4084,7 +4171,7 @@ test_ClusterSubszPingEach(void)
 void
 test_ClusterJszPingEach(void)
 {
-    cluster            c;
+    cluster c;
     natsStatus         s;
     natsConnection    *accts[3] = {NULL, NULL, NULL};
     natsSysJszWalkList walks    = {NULL, 0};
@@ -4226,6 +4313,7 @@ main(int argc, char **argv)
         return 1;
     }
 
+    _destroyRememberedHandles();
     _stopAllServers();
     _removeRememberedPaths();
     remove(LOGFILE_NAME);

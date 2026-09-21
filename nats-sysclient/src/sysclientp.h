@@ -74,7 +74,6 @@ typedef struct
 {
     const char  *Subject;    ///< One of the SYS_SUBJ_* templates.
     const char  *PayloadKey; ///< "data" for every endpoint but STATSZ ("statsz").
-    int          BufHint;    ///< Initial request buffer size, big enough for the common case.
     size_t       RespSize;   ///< sizeof the endpoint's response struct.
     size_t       ServerOff;  ///< offsetof its natsSysServerInfo member.
     size_t       ErrorOff;   ///< offsetof its natsSysAPIError member.
@@ -86,11 +85,11 @@ typedef struct
 } sysEndpoint;
 
 // Fills a descriptor for a response type laid out as {Server; payload; Error;}.
-#define SYS_ENDPOINT(respType, payloadMember, subj, key, hint, marshal, parse, freep) \
-    {                                                                                \
-        (subj), (key), (hint), sizeof(respType), offsetof(respType, Server),        \
-        offsetof(respType, Error), offsetof(respType, payloadMember), (marshal),    \
-        (parse), (freep)                                                             \
+#define SYS_ENDPOINT(respType, payloadMember, subj, key, marshal, parse, freep) \
+    {                                                                          \
+        (subj), (key), sizeof(respType), offsetof(respType, Server),           \
+        offsetof(respType, Error), offsetof(respType, payloadMember),          \
+        (marshal), (parse), (freep)                                            \
     }
 
 // Marshals the options, sends the request to one server and decodes the reply
@@ -130,22 +129,6 @@ typedef void (*sysDestroyFn)(void *elem, const void *ctx);
 void
 sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *ctx);
 
-// Splits a response envelope into its parts. 'payloadKey' is "data" for every
-// endpoint except STATSZ, which uses "statsz".
-//
-// *payload borrows a node owned by 'root' and is set to NULL when the key is
-// absent. 'server' and 'apiErr' are filled in place; the caller releases them
-// with sysclient_freeServerInfo / sysclient_freeAPIError.
-natsStatus
-sysclient_parseEnvelope(natsSysServerInfo *server, natsSysAPIError *apiErr,
-                        natsJSON **payload, natsJSON *root, const char *payloadKey);
-
-void
-sysclient_freeServerInfo(natsSysServerInfo *server);
-
-void
-sysclient_freeAPIError(natsSysAPIError *apiErr);
-
 //
 // Page walks.
 //
@@ -160,10 +143,16 @@ sysclient_freeAPIError(natsSysAPIError *apiErr);
 /** Delivers one page to the caller; returns false to stop the walk. */
 typedef bool (*sysPageHandler)(void *page, void *closure);
 
-// offsetof() an int member, rejected at compile time for any other width, so a
-// walk table cannot silently read four bytes of an int64_t.
-#define SYS_INT_OFF(st, fld) \
-    (offsetof(st, fld) + 0 * sizeof(char[(sizeof(((st *) 0)->fld) == sizeof(int)) ? 1 : -1]))
+// offsetof() a member of exactly the given type's width, rejected at compile
+// time for any other, so a walk table cannot silently read four bytes of an
+// int64_t.
+#define SYS_OFF_OF(st, fld, type) \
+    (offsetof(st, fld) + 0 * sizeof(char[(sizeof(((st *) 0)->fld) == sizeof(type)) ? 1 : -1]))
+#define SYS_INT_OFF(st, fld)  SYS_OFF_OF(st, fld, int)
+#define SYS_BOOL_OFF(st, fld) SYS_OFF_OF(st, fld, bool)
+
+// For PagedOff: the endpoint always pages.
+#define SYS_ALWAYS_PAGED ((size_t) -1)
 
 typedef struct
 {
@@ -185,10 +174,10 @@ typedef struct
     natsStatus (*Fetch)(void **page, natsSysClient *client, const char *serverID,
                         const void *opts, int offset, int64_t timeout);
 
-    /** Whether the options ask for a paged result at all; NULL means always.
-     * JSZ pages only over account details, so without Accounts there is
-     * exactly one page whatever it reports. 'opts' may be NULL. */
-    bool (*IsPaged)(const void *opts);
+    /** SYS_BOOL_OFF of the option that asks for a paged result, or
+     * SYS_ALWAYS_PAGED. JSZ pages only over account details, so without
+     * Accounts there is exactly one page whatever it reports. */
+    size_t PagedOff;
 
 } sysWalkOps;
 
@@ -303,16 +292,12 @@ sysclient_freeSubDetail(void *dst);
 // that are not plain scalars.
 //
 
-natsStatus
-sysclient_dupStr(char **dst, const char *src);
-
-// The same, for members the public option structs declare const. To a caller
-// those strings are inputs, which is why they are const there; a walk's copy
-// owns its strings, and these two are the only places that ownership is
-// expressed. On failure *dst is NULL. (The string-array equivalent stays local
-// to sysclient.c: only the event filter has an array member, and only
-// sysclient.c copies it.)
-
+// Duplicates a string into a member the public option structs declare const.
+// To a caller those strings are inputs, which is why they are const there; a
+// walk's copy owns its strings, and this pair is the only place that
+// ownership is expressed. A NULL 'src' yields NULL; on failure *dst is NULL.
+// (The string-array equivalent stays local to sysclient.c: only the event
+// filter has an array member, and only sysclient.c copies it.)
 natsStatus
 sysclient_dupOptStr(const char **dst, const char *src);
 
@@ -338,21 +323,6 @@ sysclient_initOpts(void *opts, size_t size)
 
     memset(opts, 0, size);
     return NATS_OK;
-}
-
-// Maps an accessor-level failure onto the status the public API documents.
-//
-// A payload that is not an object, or a key holding a value of the wrong type,
-// surfaces as NATS_INVALID_ARG from the json.h accessors. Report that as
-// NATS_ERR (malformed response); NATS_INVALID_ARG stays reserved for a bad
-// argument to the natsSysClient_* call itself. Mirrors
-// nats-context/src/context.c:135-141.
-static inline natsStatus
-sysclient_responseStatus(natsStatus s)
-{
-    if ((s != NATS_OK) && (s != NATS_NO_MEMORY))
-        return NATS_ERR;
-    return s;
 }
 
 #endif /* NATS_SYSCLIENT_P_H_ */

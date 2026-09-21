@@ -80,19 +80,23 @@ natsJSON_Type(const natsJSON *json);
 natsStatus
 natsJSON_AsBool(const natsJSON *json, bool *out);
 
+// Interprets a number node as a double. Returns NATS_INVALID_ARG for a
+// non-number and for a literal outside double's range, rather than storing
+// infinity. Integers above 2^53 lose precision here; use natsJSON_AsInt or
+// natsJSON_AsUInt for those.
 natsStatus
 natsJSON_AsNumber(const natsJSON *json, double *out);
 
-// Interprets a number node as a 64-bit integer (the integer part; any
-// fractional or exponent part is ignored).
-// Returns NATS_INVALID_ARG for a non-number, and for a literal too large for
-// the type rather than storing a saturated value the server never sent.
+// Interprets a number node as a 64-bit integer. Returns NATS_INVALID_ARG for
+// a non-number, for a literal with a fractional or exponent part (rather
+// than truncating "1e5" to 1), and for a literal too large for the type
+// rather than storing a saturated value the server never sent.
 natsStatus
 natsJSON_AsInt(const natsJSON *json, int64_t *out);
 
 // As natsJSON_AsInt, but unsigned. Use this for wire fields declared uint64:
 // natsJSON_AsInt rejects anything above INT64_MAX, so a counter above that
-// silently clamped.
+// would be reported as malformed.
 natsStatus
 natsJSON_AsUInt(const natsJSON *json, uint64_t *out);
 
@@ -134,12 +138,19 @@ natsJSON_FieldCount(const natsJSON *json);
 natsStatus
 natsJSON_FieldAt(const natsJSON *json, int idx, const char **key, natsJSON **value);
 
+// As natsJSON_Field, but a member whose value is JSON null is reported as
+// NATS_NOT_FOUND, so "present but null" reads the same as "absent". This is
+// the lookup the typed getters below are built on; use it directly for a
+// member that is an object, array or opaque subtree.
+natsStatus
+natsJSON_Lookup(const natsJSON *json, const char *key, natsJSON **out);
+
 //
-// Typed object-field convenience getters. Each looks up 'key' and extracts a
-// value of the requested type. A missing key — or a key whose value is JSON
-// null — returns NATS_NOT_FOUND and leaves *out untouched, so callers can layer
-// these over pre-initialised defaults. A present key of the wrong type returns
-// NATS_INVALID_ARG.
+// Typed object-field convenience getters. Each looks up 'key' with
+// natsJSON_Lookup and extracts a value of the requested type. A missing key —
+// or a key whose value is JSON null — returns NATS_NOT_FOUND and leaves *out
+// untouched, so callers can layer these over pre-initialised defaults. A
+// present key of the wrong type returns NATS_INVALID_ARG.
 //
 
 // On success *out is a heap copy of the string; the caller frees it.
@@ -194,19 +205,6 @@ natsStatus
 natsJSON_ArrayGet(const natsJSON *json, int idx, natsJSON **out);
 
 //
-// Serialization.
-//
-
-// Appends the JSON text of 'json' to 'out'. Numbers are emitted from the
-// literal text captured at parse time, so a parse/write round trip preserves
-// them exactly; object members keep their document order. Nothing is written
-// on error. Returns NATS_INVALID_ARG for NULL arguments.
-//
-// Use this to hand back a subtree of a parsed document as raw JSON.
-natsStatus
-natsJSON_Write(const natsJSON *json, natsBuffer *out);
-
-//
 // Writer — builds a JSON object incrementally into a natsBuffer.
 //
 // Errors are sticky: once a call fails, later calls are no-ops that return the
@@ -233,7 +231,7 @@ typedef struct __natsJSONWriter
 {
     natsBuffer *buf;
     natsStatus  st;        // sticky: first error encountered
-    int         depth;     // number of open objects
+    bool        open;      // whether the object has been opened and not closed
     bool        needComma; // whether a separator precedes the next member
 
 } natsJSONWriter;
@@ -253,19 +251,13 @@ natsJSONWriter_Status(const natsJSONWriter *w);
 natsStatus
 natsJSONWriter_Fail(natsJSONWriter *w, natsStatus st);
 
-// Opens the root object. A writer produces exactly one value, so this is
-// rejected with NATS_ERR (and the writer poisoned) inside an open object or
-// after the root has been closed; nested objects go through
-// natsJSONWriter_StartObjectKey.
+// Opens the object. A writer produces exactly one flat object, so this is
+// rejected with NATS_ERR (and the writer poisoned) while the object is open
+// or after it has been closed.
 natsStatus
 natsJSONWriter_StartObject(natsJSONWriter *w);
 
-// Opens an object as the member 'key' of the innermost open object. Returns
-// NATS_ERR when no object is open.
-natsStatus
-natsJSONWriter_StartObjectKey(natsJSONWriter *w, const char *key);
-
-// Closes the innermost open object. Returns NATS_ERR if none is open.
+// Closes the object. Returns NATS_ERR if it is not open.
 natsStatus
 natsJSONWriter_EndObject(natsJSONWriter *w);
 

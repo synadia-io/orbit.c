@@ -18,10 +18,12 @@
 // rather than emitting it.
 //
 // Which helper a field uses is the whole encoding contract, so it is worth
-// being deliberate: five of the six option structs omit their unset fields and
-// use sysclient_opt*(), while CONNZ always sends every one of its own fields
-// and so uses the plain natsJSONWriter_Add*() calls, emitting `"sort":""` and
-// `"state":0` on an otherwise empty request. That difference is visible to the
+// being deliberate: four of the six option structs omit their unset fields and
+// use sysclient_opt*(); CONNZ always sends every one of its own fields and so
+// uses the plain natsJSONWriter_Add*() calls, emitting `"sort":""` and
+// `"state":0` on an otherwise empty request; SUBSZ is mixed, always sending
+// offset, limit and subscriptions but omitting account and test. That
+// difference is visible to the
 // server, so it is preserved rather than tidied away.
 
 #ifndef NATS_SYSCLIENT_MARSHAL_H_

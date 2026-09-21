@@ -28,9 +28,11 @@ extern "C" {
  *
  * JetStream state, from the `$SYS.REQ.SERVER.<id>.JSZ` endpoint.
  *
- * This endpoint paginates over **accounts**, and only when
- * #natsSysJszOptions.Accounts is set. Without it a request returns a single
- * response with no account details.
+ * This endpoint paginates over **accounts**, and a walk pages only when
+ * #natsSysJszOptions.Accounts is set. The server also returns account
+ * details when #natsSysJszOptions.Streams, #natsSysJszOptions.Consumer or
+ * #natsSysJszOptions.Account is set, but a walk treats such a request as a
+ * single page.
  * @{
  */
 
@@ -149,7 +151,14 @@ typedef struct __natsSysJszRespList
  */
 typedef struct __natsSysJszOptions
 {
-    const char *Account; ///< Report only this account.
+    /** \brief Report only this account.
+     *
+     * \note Takes precedence over #Accounts on the server, which then
+     * ignores #Offset and #Limit. A walk with both set therefore delivers
+     * the same single account once per page until the reported account
+     * count is covered.
+     */
+    const char *Account;
 
     bool Accounts;         ///< Include per-account details, and enable pagination.
     bool Streams;          ///< Include stream details; implies #Accounts server-side.
@@ -200,7 +209,8 @@ natsSysJszOptions_Init(natsSysJszOptions *opts);
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response.
+ * did not answer in time, #NATS_ERR for a malformed response,
+ * #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Jsz(natsSysJszResp **newResp, natsSysClient *client,

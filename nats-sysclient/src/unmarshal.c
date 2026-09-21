@@ -33,18 +33,29 @@ _lookupTyped(natsJSON **node, natsJSON *obj, const char *key, natsJSONType want)
 
     *node = NULL;
 
-    s = natsJSON_Field(obj, key, &found);
+    s = natsJSON_Lookup(obj, key, &found);
     if (s == NATS_NOT_FOUND)
         return NATS_OK;
     if (s != NATS_OK)
         return s;
-    if (natsJSON_Type(found) == NATS_JSON_NULL)
-        return NATS_OK;
     if (natsJSON_Type(found) != want)
         return NATS_INVALID_ARG;
 
     *node = found;
     return NATS_OK;
+}
+
+// The array at 'key', with its size, under the same policy: *arr is NULL for
+// an absent, null or empty array so callers can return at once.
+static natsStatus
+_lookupArray(natsJSON **arr, int *n, natsJSON *obj, const char *key)
+{
+    natsStatus s = _lookupTyped(arr, obj, key, NATS_JSON_ARRAY);
+
+    *n = (*arr != NULL) ? natsJSON_ArraySize(*arr) : 0;
+    if (*n == 0)
+        *arr = NULL;
+    return s;
 }
 
 // Copies the input text one node was parsed from into a freshly allocated
@@ -71,25 +82,22 @@ _nodeToStr(char **out, natsJSON *node)
     return NATS_OK;
 }
 
-natsStatus
-sysclient_rawJSONField(char **out, natsJSON *obj, const char *key)
+// Copies the input text of the value at 'key' verbatim; *out is NULL when the
+// key is absent or null. Any node type is acceptable: these are opaque
+// subtrees.
+static natsStatus
+_rawJSONField(char **out, natsJSON *obj, const char *key)
 {
     natsJSON  *field = NULL;
     natsStatus s;
 
-    if ((out == NULL) || (key == NULL))
-        return NATS_INVALID_ARG;
-
     *out = NULL;
 
-    // Any node type is acceptable here; these are opaque subtrees.
-    s = natsJSON_Field(obj, key, &field);
+    s = natsJSON_Lookup(obj, key, &field);
     if (s == NATS_NOT_FOUND)
         return NATS_OK;
     if (s != NATS_OK)
         return s;
-    if (natsJSON_Type(field) == NATS_JSON_NULL)
-        return NATS_OK;
 
     return _nodeToStr(out, field);
 }
@@ -111,13 +119,9 @@ sysclient_valueArray(void **out, int *count, natsJSON *obj, const char *key,
     *out   = NULL;
     *count = 0;
 
-    s = _lookupTyped(&arrNode, obj, key, NATS_JSON_ARRAY);
+    s = _lookupArray(&arrNode, &n, obj, key);
     if ((s != NATS_OK) || (arrNode == NULL))
         return s;
-
-    n = natsJSON_ArraySize(arrNode);
-    if (n == 0)
-        return NATS_OK;
 
     block = (char *) NATS_CALLOC((size_t) n, elemSize);
     if (block == NULL)
@@ -137,9 +141,9 @@ sysclient_valueArray(void **out, int *count, natsJSON *obj, const char *key,
             // members allocated behind it. Every sysFreeFn tolerates a zeroed
             // element, and the block was calloc'd.
             void *built = block;
-            int   n     = i + 1;
+            int   nb    = i + 1;
 
-            sysclient_freeValueArray(&built, &n, elemSize, freeElem);
+            sysclient_freeValueArray(&built, &nb, elemSize, freeElem);
             return s;
         }
     }
@@ -184,13 +188,9 @@ sysclient_ptrArray(void ***out, int *count, natsJSON *obj, const char *key,
     *out   = NULL;
     *count = 0;
 
-    s = _lookupTyped(&arrNode, obj, key, NATS_JSON_ARRAY);
+    s = _lookupArray(&arrNode, &n, obj, key);
     if ((s != NATS_OK) || (arrNode == NULL))
         return s;
-
-    n = natsJSON_ArraySize(arrNode);
-    if (n == 0)
-        return NATS_OK;
 
     arr = (void **) NATS_CALLOC((size_t) n, sizeof(void *));
     if (arr == NULL)
@@ -214,18 +214,10 @@ sysclient_ptrArray(void ***out, int *count, natsJSON *obj, const char *key,
 
         if (s != NATS_OK)
         {
-            int j;
-
             // arr[i] may be allocated but unparsed; release it too.
-            for (j = 0; j <= i; j++)
-            {
-                if (arr[j] == NULL)
-                    continue;
-                if (freeElem != NULL)
-                    freeElem(arr[j]);
-                NATS_FREE(arr[j]);
-            }
-            NATS_FREE(arr);
+            int nb = i + 1;
+
+            sysclient_freePtrArray(&arr, &nb, freeElem);
             return s;
         }
     }
@@ -336,13 +328,9 @@ sysclient_rawJSONArray(char ***out, int *count, natsJSON *obj, const char *key)
     *out   = NULL;
     *count = 0;
 
-    s = _lookupTyped(&arrNode, obj, key, NATS_JSON_ARRAY);
+    s = _lookupArray(&arrNode, &n, obj, key);
     if ((s != NATS_OK) || (arrNode == NULL))
         return s;
-
-    n = natsJSON_ArraySize(arrNode);
-    if (n == 0)
-        return NATS_OK;
 
     arr = (char **) NATS_CALLOC((size_t) n, sizeof(char *));
     if (arr == NULL)
@@ -371,19 +359,7 @@ sysclient_rawJSONArray(char ***out, int *count, natsJSON *obj, const char *key)
 void
 sysclient_freeStrArray(char ***arr, int *count)
 {
-    char **p;
-    int    i;
-
-    if ((arr == NULL) || (count == NULL))
-        return;
-
-    p = *arr;
-    for (i = 0; (p != NULL) && (i < *count); i++)
-        NATS_FREE(p[i]);
-
-    NATS_FREE(p);
-    *arr   = NULL;
-    *count = 0;
+    sysclient_freePtrArray((void ***) arr, count, NULL);
 }
 
 // The narrowing kinds range-check rather than truncate: a value the member
@@ -436,7 +412,7 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n)
                 s = natsJSON_TakeStrArray(obj, f->Key, (char ***) p, COUNT_PTR(dst, f));
                 break;
             case SYS_FLD_RAWJSON:
-                s = sysclient_rawJSONField((char **) p, obj, f->Key);
+                s = _rawJSONField((char **) p, obj, f->Key);
                 break;
             case SYS_FLD_BOOL:
                 s = natsJSON_GetBool(obj, f->Key, (bool *) p);

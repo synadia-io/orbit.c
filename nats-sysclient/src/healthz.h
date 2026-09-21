@@ -130,7 +130,8 @@ natsSysHealthzOptions_Init(natsSysHealthzOptions *opts);
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NOT_FOUND when no server with that ID answered, #NATS_TIMEOUT if it
- * did not answer in time, #NATS_ERR for a malformed response.
+ * did not answer in time, #NATS_ERR for a malformed response,
+ * #NATS_NO_MEMORY on allocation failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_Healthz(natsSysHealthzResp **newResp, natsSysClient *client,
@@ -157,7 +158,8 @@ natsSysClient_Healthz(natsSysHealthzResp **newResp, natsSysClient *client,
  * #NATS_SYS_DEFAULT_REQUEST_TIMEOUT.
  * @return #NATS_OK on success, #NATS_INVALID_ARG for a bad argument,
  * #NATS_NO_RESPONDERS when nothing is listening on the system subject,
- * #NATS_ERR for a malformed response.
+ * #NATS_ERR for a malformed response, #NATS_NO_MEMORY on allocation
+ * failure.
  */
 NATS_EXTERN natsStatus
 natsSysClient_HealthzPing(natsSysHealthzRespList *list, natsSysClient *client,
