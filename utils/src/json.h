@@ -24,6 +24,8 @@
 #ifndef ORBIT_JSON_H_
 #define ORBIT_JSON_H_
 
+#include "buf.h"
+
 #include <nats/nats.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -78,18 +80,29 @@ natsJSON_Type(const natsJSON *json);
 natsStatus
 natsJSON_AsBool(const natsJSON *json, bool *out);
 
+// Interprets a number node as a double. Returns NATS_INVALID_ARG for a
+// non-number or a literal outside double's range.
 natsStatus
 natsJSON_AsNumber(const natsJSON *json, double *out);
 
-// Interprets a number node as a 64-bit integer (the integer part; any
-// fractional or exponent part is ignored).
+// Interprets a number node as a 64-bit integer. Returns NATS_INVALID_ARG for
+// a non-number, a fraction or exponent, or a value out of range.
 natsStatus
 natsJSON_AsInt(const natsJSON *json, int64_t *out);
+
+// As natsJSON_AsInt, but unsigned.
+natsStatus
+natsJSON_AsUInt(const natsJSON *json, uint64_t *out);
 
 // Sets *out to the node's decoded string. The pointer is borrowed from the
 // tree and must not be freed.
 natsStatus
 natsJSON_AsStr(const natsJSON *json, const char **out);
+
+// Returns the input text 'json' was parsed from, not NUL-terminated. It
+// borrows from the 'data' passed to natsJSON_Parse(), not from the tree.
+natsStatus
+natsJSON_Raw(const natsJSON *json, const char **text, int *len);
 
 //
 // Object accessors.
@@ -113,17 +126,26 @@ natsJSON_FieldCount(const natsJSON *json);
 natsStatus
 natsJSON_FieldAt(const natsJSON *json, int idx, const char **key, natsJSON **value);
 
+// As natsJSON_Field, but a JSON null value is reported as NATS_NOT_FOUND.
+natsStatus
+natsJSON_Lookup(const natsJSON *json, const char *key, natsJSON **out);
+
 //
-// Typed object-field convenience getters. Each looks up 'key' and extracts a
-// value of the requested type. A missing key — or a key whose value is JSON
-// null — returns NATS_NOT_FOUND and leaves *out untouched, so callers can layer
-// these over pre-initialised defaults. A present key of the wrong type returns
-// NATS_INVALID_ARG.
+// Typed object-field convenience getters. Each looks up 'key' with
+// natsJSON_Lookup and extracts a value of the requested type. A missing key —
+// or a key whose value is JSON null — returns NATS_NOT_FOUND and leaves *out
+// untouched, so callers can layer these over pre-initialised defaults. A
+// present key of the wrong type returns NATS_INVALID_ARG.
 //
 
 // On success *out is a heap copy of the string; the caller frees it.
 natsStatus
 natsJSON_GetStr(const natsJSON *json, const char *key, char **out);
+
+// As natsJSON_GetStr, but moves the string out of the tree instead of copying
+// it; the member is left as a JSON null.
+natsStatus
+natsJSON_TakeStr(natsJSON *json, const char *key, char **out);
 
 natsStatus
 natsJSON_GetBool(const natsJSON *json, const char *key, bool *out);
@@ -134,12 +156,20 @@ natsJSON_GetNumber(const natsJSON *json, const char *key, double *out);
 natsStatus
 natsJSON_GetInt(const natsJSON *json, const char *key, int64_t *out);
 
+natsStatus
+natsJSON_GetUInt(const natsJSON *json, const char *key, uint64_t *out);
+
 // Extracts a JSON array of strings into a freshly allocated array of heap
 // strings. On success *out holds *count entries (or NULL when *count is 0); the
 // caller frees each entry and then the array. Returns NATS_INVALID_ARG when the
 // field is not an array or contains a non-string element.
 natsStatus
 natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *count);
+
+// As natsJSON_GetStrArray, but moves the strings out as natsJSON_TakeStr
+// does. On NATS_INVALID_ARG the tree is untouched.
+natsStatus
+natsJSON_TakeStrArray(natsJSON *json, const char *key, char ***out, int *count);
 
 //
 // Array accessors.
@@ -154,6 +184,80 @@ natsJSON_ArraySize(const natsJSON *json);
 // NATS_INVALID_ARG when 'json' is not an array or 'idx' is out of range.
 natsStatus
 natsJSON_ArrayGet(const natsJSON *json, int idx, natsJSON **out);
+
+//
+// Writer — builds a JSON object incrementally into a natsBuffer.
+//
+// Errors are sticky: after a failure later calls are no-ops, so a run of
+// appends is checked once with natsJSONWriter_Status(). The writer borrows the
+// buffer and needs no destroy.
+//
+// Typical use:
+//
+//     natsBuffer     buf = NATS_EMPTY_BUFFER;
+//     natsJSONWriter w;
+//
+//     natsBuf_Init(&buf, 256);
+//     natsJSONWriter_Init(&w, &buf);
+//     natsJSONWriter_StartObject(&w);
+//     if (!nats_IsStringEmpty(opts->Account))
+//         natsJSONWriter_AddStr(&w, "account", opts->Account);
+//     if (opts->Details)
+//         natsJSONWriter_AddBool(&w, "details", true);
+//     natsJSONWriter_EndObject(&w);
+//     s = natsJSONWriter_Status(&w);
+//
+typedef struct __natsJSONWriter
+{
+    natsBuffer *buf;
+    natsStatus  st;        // sticky: first error encountered
+    bool        open;      // whether the object has been opened and not closed
+    bool        needComma; // whether a separator precedes the next member
+
+} natsJSONWriter;
+
+// Binds 'w' to 'buf'. The buffer is not reset, so a writer can append to a
+// buffer that already holds data. Returns NATS_INVALID_ARG for NULL arguments.
+natsStatus
+natsJSONWriter_Init(natsJSONWriter *w, natsBuffer *buf);
+
+// Returns the first error the writer encountered, or NATS_OK.
+natsStatus
+natsJSONWriter_Status(const natsJSONWriter *w);
+
+// Records 'st' as the writer's error if it has none yet; returns the status.
+natsStatus
+natsJSONWriter_Fail(natsJSONWriter *w, natsStatus st);
+
+// Opens the object. A writer produces exactly one flat object; a second call
+// fails with NATS_ERR.
+natsStatus
+natsJSONWriter_StartObject(natsJSONWriter *w);
+
+// Closes the object. Returns NATS_ERR if it is not open.
+natsStatus
+natsJSONWriter_EndObject(natsJSONWriter *w);
+
+//
+// Member appenders. Each writes `"key":<value>`; a NULL string is written as
+// "".
+//
+
+natsStatus
+natsJSONWriter_AddStr(natsJSONWriter *w, const char *key, const char *val);
+
+natsStatus
+natsJSONWriter_AddBool(natsJSONWriter *w, const char *key, bool val);
+
+natsStatus
+natsJSONWriter_AddInt(natsJSONWriter *w, const char *key, int64_t val);
+
+natsStatus
+natsJSONWriter_AddUInt(natsJSONWriter *w, const char *key, uint64_t val);
+
+// Writes an array of strings. A NULL 'vals' or a 'count' of 0 writes `[]`.
+natsStatus
+natsJSONWriter_AddStrArray(natsJSONWriter *w, const char *key, const char *const *vals, int count);
 
 #ifdef __cplusplus
 }

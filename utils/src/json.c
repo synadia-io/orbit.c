@@ -14,6 +14,10 @@
 #include "json.h"
 #include "os_shims.h"
 
+#include <inttypes.h>
+#include <stdio.h>
+#include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,6 +28,11 @@
 struct __natsJSON
 {
     natsJSONType type;
+
+    // Input span this value was parsed from; see natsJSON_Raw().
+    int         rawLen;
+    const char *raw;
+
     union
     {
         bool  boolean; // NATS_JSON_BOOL
@@ -589,26 +598,36 @@ _parseObject(_jsonParser *ps, natsJSON **out)
 static natsStatus
 _parseValue(_jsonParser *ps, natsJSON **out)
 {
-    char c;
+    const char *start;
+    natsStatus  s;
+    char        c;
 
     _skipWS(ps);
     if (ps->cur >= ps->end)
         return NATS_ERR;
 
-    c = *ps->cur;
+    start = ps->cur;
+    c     = *start;
     switch (c)
     {
-        case '{': return _parseObject(ps, out);
-        case '[': return _parseArray(ps, out);
-        case '"': return _parseStringNode(ps, out);
+        case '{': s = _parseObject(ps, out); break;
+        case '[': s = _parseArray(ps, out); break;
+        case '"': s = _parseStringNode(ps, out); break;
         case 't':
         case 'f':
-        case 'n': return _parseLiteral(ps, out);
+        case 'n': s = _parseLiteral(ps, out); break;
         default:
-            if ((c == '-') || _isDigit(c))
-                return _parseNumber(ps, out);
-            return NATS_ERR;
+            if (!(c == '-') && !_isDigit(c))
+                return NATS_ERR;
+            s = _parseNumber(ps, out);
+            break;
     }
+    if (s != NATS_OK)
+        return s;
+
+    (*out)->raw    = start;
+    (*out)->rawLen = (int) (ps->cur - start);
+    return NATS_OK;
 }
 
 natsStatus
@@ -698,15 +717,49 @@ natsJSON_AsNumber(const natsJSON *json, double *out)
     if ((json == NULL) || (out == NULL) || (json->type != NATS_JSON_NUMBER))
         return NATS_INVALID_ARG;
     *out = strtod(json->v.str, NULL);
+
+    if (isinf(*out))
+        return NATS_INVALID_ARG;
+    return NATS_OK;
+}
+
+// Anything strtoll leaves unparsed is a fraction or exponent.
+natsStatus
+natsJSON_AsInt(const natsJSON *json, int64_t *out)
+{
+    int64_t val;
+    char   *end = NULL;
+
+    if ((json == NULL) || (out == NULL) || (json->type != NATS_JSON_NUMBER))
+        return NATS_INVALID_ARG;
+
+    errno = 0;
+    val   = (int64_t) strtoll(json->v.str, &end, 10);
+
+    if ((errno == ERANGE) || (*end != '\0'))
+        return NATS_INVALID_ARG;
+    *out = val;
     return NATS_OK;
 }
 
 natsStatus
-natsJSON_AsInt(const natsJSON *json, int64_t *out)
+natsJSON_AsUInt(const natsJSON *json, uint64_t *out)
 {
+    uint64_t val;
+    char    *end = NULL;
+
     if ((json == NULL) || (out == NULL) || (json->type != NATS_JSON_NUMBER))
         return NATS_INVALID_ARG;
-    *out = (int64_t) strtoll(json->v.str, NULL, 10);
+
+    if (json->v.str[0] == '-')
+        return NATS_INVALID_ARG;
+
+    errno = 0;
+    val   = (uint64_t) strtoull(json->v.str, &end, 10);
+
+    if ((errno == ERANGE) || (*end != '\0'))
+        return NATS_INVALID_ARG;
+    *out = val;
     return NATS_OK;
 }
 
@@ -717,6 +770,27 @@ natsJSON_AsStr(const natsJSON *json, const char **out)
         return NATS_INVALID_ARG;
     *out = json->v.str;
     return NATS_OK;
+}
+
+natsStatus
+natsJSON_Raw(const natsJSON *json, const char **text, int *len)
+{
+    if ((json == NULL) || (text == NULL) || (len == NULL))
+        return NATS_INVALID_ARG;
+    *text = json->raw;
+    *len  = json->rawLen;
+    return NATS_OK;
+}
+
+// Moves a string node's content out and leaves the node a JSON null.
+static char *
+_takeStrNode(natsJSON *node)
+{
+    char *str = node->v.str;
+
+    node->v.str = NULL;
+    node->type  = NATS_JSON_NULL;
+    return str;
 }
 
 natsStatus
@@ -763,15 +837,14 @@ natsJSON_FieldAt(const natsJSON *json, int idx, const char **key, natsJSON **val
     return NATS_OK;
 }
 
-// Looks up 'key' in an object, mapping a JSON null value to NATS_NOT_FOUND so
-// the typed getters treat "present but null" the same as "absent".
-static natsStatus
-_lookupField(const natsJSON *json, const char *key, natsJSON **field)
+natsStatus
+natsJSON_Lookup(const natsJSON *json, const char *key, natsJSON **out)
 {
-    natsStatus s = natsJSON_Field(json, key, field);
+    natsStatus s = natsJSON_Field(json, key, out);
+
     if (s != NATS_OK)
         return s;
-    if ((*field)->type == NATS_JSON_NULL)
+    if ((*out)->type == NATS_JSON_NULL)
         return NATS_NOT_FOUND;
     return NATS_OK;
 }
@@ -785,7 +858,7 @@ natsJSON_GetStr(const natsJSON *json, const char *key, char **out)
     if (out == NULL)
         return NATS_INVALID_ARG;
 
-    s = _lookupField(json, key, &field);
+    s = natsJSON_Lookup(json, key, &field);
     if (s != NATS_OK)
         return s;
     if (field->type != NATS_JSON_STRING)
@@ -793,6 +866,25 @@ natsJSON_GetStr(const natsJSON *json, const char *key, char **out)
 
     *out = NATS_STRDUP(field->v.str);
     return (*out == NULL) ? NATS_NO_MEMORY : NATS_OK;
+}
+
+natsStatus
+natsJSON_TakeStr(natsJSON *json, const char *key, char **out)
+{
+    natsJSON  *field = NULL;
+    natsStatus s;
+
+    if (out == NULL)
+        return NATS_INVALID_ARG;
+
+    s = natsJSON_Lookup(json, key, &field);
+    if (s != NATS_OK)
+        return s;
+    if (field->type != NATS_JSON_STRING)
+        return NATS_INVALID_ARG;
+
+    *out = _takeStrNode(field);
+    return NATS_OK;
 }
 
 natsStatus
@@ -804,7 +896,7 @@ natsJSON_GetBool(const natsJSON *json, const char *key, bool *out)
     if (out == NULL)
         return NATS_INVALID_ARG;
 
-    s = _lookupField(json, key, &field);
+    s = natsJSON_Lookup(json, key, &field);
     if (s != NATS_OK)
         return s;
 
@@ -820,7 +912,7 @@ natsJSON_GetNumber(const natsJSON *json, const char *key, double *out)
     if (out == NULL)
         return NATS_INVALID_ARG;
 
-    s = _lookupField(json, key, &field);
+    s = natsJSON_Lookup(json, key, &field);
     if (s != NATS_OK)
         return s;
 
@@ -836,7 +928,7 @@ natsJSON_GetInt(const natsJSON *json, const char *key, int64_t *out)
     if (out == NULL)
         return NATS_INVALID_ARG;
 
-    s = _lookupField(json, key, &field);
+    s = natsJSON_Lookup(json, key, &field);
     if (s != NATS_OK)
         return s;
 
@@ -844,7 +936,24 @@ natsJSON_GetInt(const natsJSON *json, const char *key, int64_t *out)
 }
 
 natsStatus
-natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *count)
+natsJSON_GetUInt(const natsJSON *json, const char *key, uint64_t *out)
+{
+    natsJSON  *field = NULL;
+    natsStatus s;
+
+    if (out == NULL)
+        return NATS_INVALID_ARG;
+
+    s = natsJSON_Lookup(json, key, &field);
+    if (s != NATS_OK)
+        return s;
+
+    return natsJSON_AsUInt(field, out);
+}
+
+// Every element is type-checked before anything is allocated or moved.
+static natsStatus
+_strArray(natsJSON *json, const char *key, char ***out, int *count, bool take)
 {
     natsJSON  *field = NULL;
     char     **arr;
@@ -855,14 +964,20 @@ natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *co
     if ((out == NULL) || (count == NULL))
         return NATS_INVALID_ARG;
 
-    s = _lookupField(json, key, &field);
+    s = natsJSON_Lookup(json, key, &field);
     if (s != NATS_OK)
         return s;
     if (field->type != NATS_JSON_ARRAY)
         return NATS_INVALID_ARG;
 
     n = field->v.array.count;
-    if (n == 0)
+    for (i = 0; i < n; i++)
+    {
+        if (field->v.array.items[i]->type != NATS_JSON_STRING)
+            return NATS_INVALID_ARG;
+    }
+
+    if (n <= 0)
     {
         *out   = NULL;
         *count = 0;
@@ -876,28 +991,32 @@ natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *co
     for (i = 0; i < n; i++)
     {
         natsJSON *elem = field->v.array.items[i];
-        if (elem->type != NATS_JSON_STRING)
-        {
-            s = NATS_INVALID_ARG;
-            goto fail;
-        }
-        arr[i] = NATS_STRDUP(elem->v.str);
+
+        arr[i] = take ? _takeStrNode(elem) : NATS_STRDUP(elem->v.str);
         if (arr[i] == NULL)
         {
-            s = NATS_NO_MEMORY;
-            goto fail;
+            for (i = 0; i < n; i++)
+                NATS_FREE(arr[i]);
+            NATS_FREE(arr);
+            return NATS_NO_MEMORY;
         }
     }
 
     *out   = arr;
     *count = n;
     return NATS_OK;
+}
 
-fail:
-    for (i = 0; i < n; i++)
-        NATS_FREE(arr[i]);
-    NATS_FREE(arr);
-    return s;
+natsStatus
+natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *count)
+{
+    return _strArray((natsJSON *) json, key, out, count, false);
+}
+
+natsStatus
+natsJSON_TakeStrArray(natsJSON *json, const char *key, char ***out, int *count)
+{
+    return _strArray(json, key, out, count, true);
 }
 
 int
@@ -919,3 +1038,275 @@ natsJSON_ArrayGet(const natsJSON *json, int idx, natsJSON **out)
     *out = json->v.array.items[idx];
     return NATS_OK;
 }
+
+//
+// Serialization.
+//
+
+// Appends 's' as a quoted JSON string; bytes >= 0x20 other than quote and
+// backslash pass through untouched.
+static natsStatus
+_writeQuoted(natsBuffer *b, const char *s)
+{
+    natsStatus  st  = NATS_OK;
+    const char *run = s; // start of the current escape-free span
+    const char *p   = s;
+
+    if ((b == NULL) || (s == NULL))
+        return NATS_INVALID_ARG;
+
+    st = natsBuf_AppendByte(b, '"');
+    for (; (*p != '\0') && (st == NATS_OK); p++)
+    {
+        unsigned char c   = (unsigned char) *p;
+        const char   *esc = NULL;
+        char          tmp[8];
+
+        switch (c)
+        {
+            case '"':  esc = "\\\""; break;
+            case '\\': esc = "\\\\"; break;
+            case '\b': esc = "\\b"; break;
+            case '\f': esc = "\\f"; break;
+            case '\n': esc = "\\n"; break;
+            case '\r': esc = "\\r"; break;
+            case '\t': esc = "\\t"; break;
+            default:
+                if (c < 0x20)
+                {
+                    snprintf(tmp, sizeof(tmp), "\\u%04x", c);
+                    esc = tmp;
+                }
+                break;
+        }
+
+        if (esc == NULL)
+            continue;
+
+        if (p > run)
+            st = natsBuf_Append(b, run, (int) (p - run));
+        if (st == NATS_OK)
+            st = natsBuf_Append(b, esc, (int) strlen(esc));
+        run = p + 1;
+    }
+
+    if ((st == NATS_OK) && (p > run))
+        st = natsBuf_Append(b, run, (int) (p - run));
+    if (st == NATS_OK)
+        st = natsBuf_AppendByte(b, '"');
+    return st;
+}
+
+static natsStatus
+_writeLit(natsBuffer *b, const char *s)
+{
+    return natsBuf_Append(b, s, (int) strlen(s));
+}
+
+//
+// Writer.
+//
+
+natsStatus
+natsJSONWriter_Init(natsJSONWriter *w, natsBuffer *buf)
+{
+    if (w == NULL)
+        return NATS_INVALID_ARG;
+
+    memset(w, 0, sizeof(*w));
+    if (buf == NULL)
+    {
+        w->st = NATS_INVALID_ARG;
+        return NATS_INVALID_ARG;
+    }
+
+    w->buf = buf;
+    return NATS_OK;
+}
+
+natsStatus
+natsJSONWriter_Status(const natsJSONWriter *w)
+{
+    if (w == NULL)
+        return NATS_INVALID_ARG;
+    return w->st;
+}
+
+natsStatus
+natsJSONWriter_Fail(natsJSONWriter *w, natsStatus st)
+{
+    if (w == NULL)
+        return NATS_INVALID_ARG;
+    if ((w->st == NATS_OK) && (st != NATS_OK))
+        w->st = st;
+    return w->st;
+}
+
+// Emits the separator, the quoted key and its colon.
+static natsStatus
+_writeKey(natsJSONWriter *w, const char *key)
+{
+    if (key == NULL)
+    {
+        w->st = NATS_INVALID_ARG;
+        return w->st;
+    }
+
+    if (w->needComma && (w->st == NATS_OK))
+        w->st = natsBuf_AppendByte(w->buf, ',');
+    if (w->st == NATS_OK)
+        w->st = _writeQuoted(w->buf, key);
+    if (w->st == NATS_OK)
+        w->st = natsBuf_AppendByte(w->buf, ':');
+
+    return w->st;
+}
+
+// Rejects a NULL writer and makes the call a no-op after a failure.
+#define WRITER_READY(w)          \
+    if ((w) == NULL)             \
+        return NATS_INVALID_ARG; \
+    if ((w)->st != NATS_OK)      \
+        return (w)->st
+
+// Emits the opening brace and enters the new object.
+static natsStatus
+_openObject(natsJSONWriter *w)
+{
+    w->st = natsBuf_AppendByte(w->buf, '{');
+    if (w->st == NATS_OK)
+    {
+        w->open      = true;
+        w->needComma = false;
+    }
+    return w->st;
+}
+
+natsStatus
+natsJSONWriter_StartObject(natsJSONWriter *w)
+{
+    WRITER_READY(w);
+
+    // A writer produces exactly one object.
+    if (w->open || w->needComma)
+    {
+        w->st = NATS_ERR;
+        return w->st;
+    }
+
+    return _openObject(w);
+}
+
+natsStatus
+natsJSONWriter_EndObject(natsJSONWriter *w)
+{
+    WRITER_READY(w);
+
+    if (!w->open)
+    {
+        w->st = NATS_ERR;
+        return w->st;
+    }
+
+    w->st = natsBuf_AppendByte(w->buf, '}');
+    if (w->st == NATS_OK)
+    {
+        w->open      = false;
+        w->needComma = true;
+    }
+    return w->st;
+}
+
+natsStatus
+natsJSONWriter_AddStr(natsJSONWriter *w, const char *key, const char *val)
+{
+    WRITER_READY(w);
+
+    if (_writeKey(w, key) != NATS_OK)
+        return w->st;
+
+    w->st = _writeQuoted(w->buf, (val != NULL ? val : ""));
+    if (w->st == NATS_OK)
+        w->needComma = true;
+    return w->st;
+}
+
+natsStatus
+natsJSONWriter_AddBool(natsJSONWriter *w, const char *key, bool val)
+{
+    WRITER_READY(w);
+
+    if (_writeKey(w, key) != NATS_OK)
+        return w->st;
+
+    w->st = _writeLit(w->buf, val ? "true" : "false");
+    if (w->st == NATS_OK)
+        w->needComma = true;
+    return w->st;
+}
+
+// Appends a number member from its formatted text; 'n' is snprintf's return.
+static natsStatus
+_addNumber(natsJSONWriter *w, const char *key, const char *text, int n, int cap)
+{
+    WRITER_READY(w);
+
+    if (_writeKey(w, key) != NATS_OK)
+        return w->st;
+
+    if ((n < 0) || (n >= cap))
+    {
+        w->st = NATS_ERR;
+        return w->st;
+    }
+
+    w->st = natsBuf_Append(w->buf, text, n);
+    if (w->st == NATS_OK)
+        w->needComma = true;
+    return w->st;
+}
+
+natsStatus
+natsJSONWriter_AddInt(natsJSONWriter *w, const char *key, int64_t val)
+{
+    char tmp[32];
+    int  n = snprintf(tmp, sizeof(tmp), "%" PRId64, val);
+
+    return _addNumber(w, key, tmp, n, (int) sizeof(tmp));
+}
+
+natsStatus
+natsJSONWriter_AddUInt(natsJSONWriter *w, const char *key, uint64_t val)
+{
+    char tmp[32];
+    int  n = snprintf(tmp, sizeof(tmp), "%" PRIu64, val);
+
+    return _addNumber(w, key, tmp, n, (int) sizeof(tmp));
+}
+
+natsStatus
+natsJSONWriter_AddStrArray(natsJSONWriter *w, const char *key, const char *const *vals, int count)
+{
+    int i;
+
+    WRITER_READY(w);
+
+    if (_writeKey(w, key) != NATS_OK)
+        return w->st;
+
+    w->st = natsBuf_AppendByte(w->buf, '[');
+    for (i = 0; (vals != NULL) && (i < count) && (w->st == NATS_OK); i++)
+    {
+        if (i > 0)
+            w->st = natsBuf_AppendByte(w->buf, ',');
+        if (w->st == NATS_OK)
+            w->st = _writeQuoted(w->buf, (vals[i] != NULL ? vals[i] : ""));
+    }
+    if (w->st == NATS_OK)
+        w->st = natsBuf_AppendByte(w->buf, ']');
+    if (w->st == NATS_OK)
+        w->needComma = true;
+    return w->st;
+}
+
+#undef WRITER_READY
