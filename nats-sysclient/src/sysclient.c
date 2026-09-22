@@ -339,7 +339,7 @@ sysclient_request(void **newResp, natsSysClient *client, const char *serverID,
     IFOK(s, ep->Marshal(&buf, opts));
     if (s == NATS_OK)
         s = _requestByID(&reply, client, serverID, ep->Subject, natsBuf_Data(&buf),
-                                  natsBuf_Len(&buf), timeout);
+                         natsBuf_Len(&buf), timeout);
     natsBuf_Destroy(&buf);
     if (s != NATS_OK)
         return s;
@@ -424,14 +424,11 @@ sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *
 
 // The members a walk table locates by offset.
 #define WALK_INT(base, off) (*(int *) ((char *) (base) + (off)))
-#define WALK_BOOL(base, off) (*(bool *) ((char *) (base) + (off)))
 
 static bool
 _isPaged(const sysWalkOps *ops, const void *opts)
 {
-    if (ops->PagedOff == SYS_ALWAYS_PAGED)
-        return true;
-    return (opts != NULL) && WALK_BOOL(opts, ops->PagedOff);
+    return (ops->Paged == NULL) || ops->Paged(opts);
 }
 
 // Hands one page to the handler, releases it, and advances *offset. With

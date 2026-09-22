@@ -28,8 +28,7 @@ extern "C" {
  *
  * JetStream state, from `$SYS.REQ.SERVER.<id>.JSZ`. The result is paginated
  * over accounts, and a walk pages only when #natsSysJszOptions.Accounts is
- * set; other options that make the server return account details still
- * yield a single page.
+ * set and #natsSysJszOptions.Account is not; otherwise it is a single page.
  * @{
  */
 
@@ -170,7 +169,7 @@ natsSysClient_JszPing(natsSysJszRespList *list, natsSysClient *client,
 
 /** \brief Walks every page of account details on one server; see
  * #natsSysClient_ConnzEach. Without #natsSysJszOptions.Accounts this is a
- * single request. */
+ * single request, as it is with #natsSysJszOptions.Account. */
 NATS_EXTERN natsStatus
 natsSysClient_JszEach(natsSysClient *client, const char *serverID,
                       const natsSysJszOptions *opts, int64_t timeout,

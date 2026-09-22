@@ -23,7 +23,6 @@
 #include <string.h>
 
 static const sysField _healthzErrorFields[] = {
-    SYS_F(SYS_FLD_INT, natsSysHealthzError, Type, "type"),
     SYS_F(SYS_FLD_STR, natsSysHealthzError, Account, "account"),
     SYS_F(SYS_FLD_STR, natsSysHealthzError, Stream, "stream"),
     SYS_F(SYS_FLD_STR, natsSysHealthzError, Consumer, "consumer"),
@@ -66,11 +65,42 @@ _marshalOptions(natsBuffer *buf, const void *optsv)
     return natsJSONWriter_Status(&w);
 }
 
+// Indexed by natsSysHealthzErrorType.
+static const char *_healthzErrorTypes[] = {
+    "CONNECTION", "BAD_REQUEST", "JETSTREAM", "ACCOUNT", "STREAM", "CONSUMER",
+};
+
 static natsStatus
 _parseHealthzError(void *elem, natsJSON *node)
 {
-    return sysclient_scanFields(elem, node, _healthzErrorFields,
-                                SYS_NFIELDS(_healthzErrorFields));
+    natsSysHealthzError *herr = (natsSysHealthzError *) elem;
+    natsJSON            *typ  = NULL;
+    const char          *str  = NULL;
+    natsStatus           s;
+    int                  i;
+
+    s = sysclient_scanFields(herr, node, _healthzErrorFields,
+                             SYS_NFIELDS(_healthzErrorFields));
+    if (s != NATS_OK)
+        return s;
+
+    // The server sends the type by name.
+    s = natsJSON_Lookup(node, "type", &typ);
+    if (s == NATS_NOT_FOUND)
+        return NATS_OK;
+    IFOK(s, natsJSON_AsStr(typ, &str));
+    if (s != NATS_OK)
+        return s;
+
+    for (i = 0; i < SYS_NFIELDS(_healthzErrorTypes); i++)
+    {
+        if (strcmp(str, _healthzErrorTypes[i]) == 0)
+        {
+            herr->Type = (natsSysHealthzErrorType) i;
+            return NATS_OK;
+        }
+    }
+    return NATS_INVALID_ARG;
 }
 
 static void

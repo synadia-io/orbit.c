@@ -106,12 +106,8 @@ sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *
 typedef bool (*sysPageHandler)(void *page, void *closure);
 
 // offsetof() a member of exactly 'type's width; anything else fails to compile.
-#define SYS_OFF_OF(st, fld, type) \
-    (offsetof(st, fld) + 0 * sizeof(char[(sizeof(((st *) 0)->fld) == sizeof(type)) ? 1 : -1]))
-#define SYS_INT_OFF(st, fld)  SYS_OFF_OF(st, fld, int)
-#define SYS_BOOL_OFF(st, fld) SYS_OFF_OF(st, fld, bool)
-
-#define SYS_ALWAYS_PAGED ((size_t) -1)
+#define SYS_INT_OFF(st, fld) \
+    (offsetof(st, fld) + 0 * sizeof(char[(sizeof(((st *) 0)->fld) == sizeof(int)) ? 1 : -1]))
 
 typedef struct
 {
@@ -130,8 +126,8 @@ typedef struct
     natsStatus (*Fetch)(void **page, natsSysClient *client, const char *serverID,
                         const void *opts, int offset, int64_t timeout);
 
-    // SYS_BOOL_OFF of the option that enables paging, or SYS_ALWAYS_PAGED.
-    size_t PagedOff;
+    // Whether 'opts' (NULL meaning defaults) pages; NULL means always.
+    bool (*Paged)(const void *opts);
 
 } sysWalkOps;
 

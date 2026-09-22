@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// JSZ paginates over accounts, and only when opts->Accounts is set; the total
-// is the flattened JetStreamStats.Accounts.
+// JSZ paginates over accounts, only when opts->Accounts is set and
+// opts->Account is not; the total is the flattened JetStreamStats.Accounts.
 
 #include "jsz.h"
 
@@ -288,6 +288,16 @@ _fetch(void **page, natsSysClient *client, const char *serverID, const void *opt
     return natsSysClient_Jsz((natsSysJszResp **) page, client, serverID, &pageOpts, timeout);
 }
 
+// sysWalkOps.Paged: the server pages account details only when asked for
+// all of them; a named Account returns just that one at every offset.
+static bool
+_paged(const void *optsv)
+{
+    const natsSysJszOptions *opts = (const natsSysJszOptions *) optsv;
+
+    return (opts != NULL) && opts->Accounts && nats_IsStringEmpty(opts->Account);
+}
+
 static const sysWalkOps _walkOps = {
     &_endpoint,
     sizeof(natsSysJszOptions),
@@ -297,7 +307,7 @@ static const sysWalkOps _walkOps = {
     _copyOptions,
     _freeOptionsCopy,
     _fetch,
-    SYS_BOOL_OFF(natsSysJszOptions, Accounts),
+    _paged,
 };
 
 SYS_WALK_SINK(natsSysJszPageHandler, natsSysJszResp)

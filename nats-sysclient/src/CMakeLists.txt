@@ -33,14 +33,7 @@ if(ORBIT_BUILD_LIB_STATIC)
 endif()
 
 # --------------------------------------
-# Install public headers
-#
-# Into a subdirectory rather than flat: varz.h, connz.h, jsz.h and friends are
-# names an installed prefix is likely to already hold, so consumers include
-# them as <nats-sysclient/varz.h>. The headers include each other with quotes,
-# which resolves inside the subdirectory unchanged.
-#
-# sysclientp.h, unmarshal.h and marshal.h are internal and are not installed.
+# Install public headers under nats-sysclient/ (generic names like varz.h)
 # --------------------------------------
 install(FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/sysclient.h

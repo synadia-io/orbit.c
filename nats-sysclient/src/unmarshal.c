@@ -386,7 +386,6 @@ sysclient_scanFields(void *dst, natsJSON *obj, const sysField *fields, int n)
         int64_t         i64;
         uint64_t        u64;
 
-
         switch (f->Kind)
         {
             case SYS_FLD_STR:

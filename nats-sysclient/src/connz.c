@@ -291,7 +291,7 @@ static const sysWalkOps _walkOps = {
     _copyOptions,
     _freeOptionsCopy,
     _fetch,
-    SYS_ALWAYS_PAGED,
+    NULL,
 };
 
 SYS_WALK_SINK(natsSysConnzPageHandler, natsSysConnzResp)

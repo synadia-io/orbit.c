@@ -81,22 +81,16 @@ natsStatus
 natsJSON_AsBool(const natsJSON *json, bool *out);
 
 // Interprets a number node as a double. Returns NATS_INVALID_ARG for a
-// non-number and for a literal outside double's range, rather than storing
-// infinity. Integers above 2^53 lose precision here; use natsJSON_AsInt or
-// natsJSON_AsUInt for those.
+// non-number or a literal outside double's range.
 natsStatus
 natsJSON_AsNumber(const natsJSON *json, double *out);
 
 // Interprets a number node as a 64-bit integer. Returns NATS_INVALID_ARG for
-// a non-number, for a literal with a fractional or exponent part (rather
-// than truncating "1e5" to 1), and for a literal too large for the type
-// rather than storing a saturated value the server never sent.
+// a non-number, a fraction or exponent, or a value out of range.
 natsStatus
 natsJSON_AsInt(const natsJSON *json, int64_t *out);
 
-// As natsJSON_AsInt, but unsigned. Use this for wire fields declared uint64:
-// natsJSON_AsInt rejects anything above INT64_MAX, so a counter above that
-// would be reported as malformed.
+// As natsJSON_AsInt, but unsigned.
 natsStatus
 natsJSON_AsUInt(const natsJSON *json, uint64_t *out);
 
@@ -105,14 +99,8 @@ natsJSON_AsUInt(const natsJSON *json, uint64_t *out);
 natsStatus
 natsJSON_AsStr(const natsJSON *json, const char **out);
 
-// Returns the span of input text 'json' was parsed from: *text points into
-// the 'data' passed to natsJSON_Parse() and *len is its length, with no
-// NUL terminator and no surrounding whitespace. Any node type is accepted.
-//
-// The span borrows from the parse input, not from the tree, so it is valid
-// only while that input is alive — copy it out when the tree may outlive the
-// buffer it was parsed from. Use this to hand back a subtree verbatim without
-// re-serializing it.
+// Returns the input text 'json' was parsed from, not NUL-terminated. It
+// borrows from the 'data' passed to natsJSON_Parse(), not from the tree.
 natsStatus
 natsJSON_Raw(const natsJSON *json, const char **text, int *len);
 
@@ -138,10 +126,7 @@ natsJSON_FieldCount(const natsJSON *json);
 natsStatus
 natsJSON_FieldAt(const natsJSON *json, int idx, const char **key, natsJSON **value);
 
-// As natsJSON_Field, but a member whose value is JSON null is reported as
-// NATS_NOT_FOUND, so "present but null" reads the same as "absent". This is
-// the lookup the typed getters below are built on; use it directly for a
-// member that is an object, array or opaque subtree.
+// As natsJSON_Field, but a JSON null value is reported as NATS_NOT_FOUND.
 natsStatus
 natsJSON_Lookup(const natsJSON *json, const char *key, natsJSON **out);
 
@@ -158,9 +143,7 @@ natsStatus
 natsJSON_GetStr(const natsJSON *json, const char *key, char **out);
 
 // As natsJSON_GetStr, but moves the string out of the tree instead of copying
-// it: *out takes over the tree's own allocation, and the member is left as a
-// JSON null, so a later getter on the same key reports NATS_NOT_FOUND. For a
-// tree that is decoded once and destroyed this halves the allocations.
+// it; the member is left as a JSON null.
 natsStatus
 natsJSON_TakeStr(natsJSON *json, const char *key, char **out);
 
@@ -183,10 +166,8 @@ natsJSON_GetUInt(const natsJSON *json, const char *key, uint64_t *out);
 natsStatus
 natsJSON_GetStrArray(const natsJSON *json, const char *key, char ***out, int *count);
 
-// As natsJSON_GetStrArray, but each entry takes over the tree's own string,
-// as natsJSON_TakeStr does. The elements are left as JSON nulls. A non-string
-// element is detected before anything is moved, so on NATS_INVALID_ARG the
-// tree is untouched.
+// As natsJSON_GetStrArray, but moves the strings out as natsJSON_TakeStr
+// does. On NATS_INVALID_ARG the tree is untouched.
 natsStatus
 natsJSON_TakeStrArray(natsJSON *json, const char *key, char ***out, int *count);
 
@@ -207,10 +188,9 @@ natsJSON_ArrayGet(const natsJSON *json, int idx, natsJSON **out);
 //
 // Writer — builds a JSON object incrementally into a natsBuffer.
 //
-// Errors are sticky: once a call fails, later calls are no-ops that return the
-// original status, so a long run of field appends can be checked once at the
-// end with natsJSONWriter_Status(). The writer borrows the buffer and owns
-// nothing, so there is nothing to destroy.
+// Errors are sticky: after a failure later calls are no-ops, so a run of
+// appends is checked once with natsJSONWriter_Status(). The writer borrows the
+// buffer and needs no destroy.
 //
 // Typical use:
 //
@@ -245,15 +225,12 @@ natsJSONWriter_Init(natsJSONWriter *w, natsBuffer *buf);
 natsStatus
 natsJSONWriter_Status(const natsJSONWriter *w);
 
-// Records 'st' as the writer's error if it has none yet, so a caller that
-// rejects its own input mid-run fails the whole document the same way a
-// write failure would. Returns the writer's status afterwards.
+// Records 'st' as the writer's error if it has none yet; returns the status.
 natsStatus
 natsJSONWriter_Fail(natsJSONWriter *w, natsStatus st);
 
-// Opens the object. A writer produces exactly one flat object, so this is
-// rejected with NATS_ERR (and the writer poisoned) while the object is open
-// or after it has been closed.
+// Opens the object. A writer produces exactly one flat object; a second call
+// fails with NATS_ERR.
 natsStatus
 natsJSONWriter_StartObject(natsJSONWriter *w);
 
@@ -262,10 +239,8 @@ natsStatus
 natsJSONWriter_EndObject(natsJSONWriter *w);
 
 //
-// Member appenders. Each writes `"key":<value>`, preceded by a comma when the
-// enclosing object already has a member. A NULL 'val' for a string member is
-// written as an empty string, which is what an unset C string means on the
-// wire; pass the field conditionally to omit it entirely.
+// Member appenders. Each writes `"key":<value>`; a NULL string is written as
+// "".
 //
 
 natsStatus

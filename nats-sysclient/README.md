@@ -98,8 +98,8 @@ for (i = 0; i < walks.Count; i++)
 natsSysConnzWalkList_Destroy(&walks);
 ```
 
-`JSZ` paginates over accounts and only when `Accounts` is set; its total is
-`JSInfo.JetStreamStats.Accounts`.
+`JSZ` paginates over accounts only when `Accounts` is set and `Account` is not;
+its total is `JSInfo.JetStreamStats.Accounts`.
 
 > **Note**: nats-server pages `SUBSZ` by offset over a sublist with no stable
 > ordering ([nats-server#7009](https://github.com/nats-io/nats-server/pull/7009)),

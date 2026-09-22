@@ -403,7 +403,7 @@ _healthzResponder(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void 
     "\"seq\":7,\"jetstream\":true,"                                       \
     "\"time\":\"2026-08-12T10:30:45.123456789Z\"},"                       \
     "\"data\":{\"status\":\"ok\",\"status_code\":200,"                    \
-    "\"errors\":[{\"type\":4,\"account\":\"JS\",\"stream\":\"orders\","    \
+    "\"errors\":[{\"type\":\"STREAM\",\"account\":\"JS\",\"stream\":\"orders\"," \
     "\"error\":\"boom\"}]}}"
 
 // SETUP starts a server, connects, and creates a client with default options.
@@ -833,6 +833,18 @@ test_HealthzMalformed(void)
 
     test("A wrongly-typed payload field is NATS_ERR: ");
     fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"status\":123}}";
+    s        = natsSysClient_Healthz(&resp, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_ERR) && (resp == NULL));
+
+    test("An unknown health error type is NATS_ERR: ");
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"status\":\"error\","
+               "\"errors\":[{\"type\":\"BOGUS\"}]}}";
+    s        = natsSysClient_Healthz(&resp, sys, "SRV1", NULL, 2000);
+    testCond((s == NATS_ERR) && (resp == NULL));
+
+    test("A numeric health error type is NATS_ERR: ");
+    fr.reply = "{\"server\":{\"id\":\"SRV1\"},\"data\":{\"status\":\"error\","
+               "\"errors\":[{\"type\":4}]}}";
     s        = natsSysClient_Healthz(&resp, sys, "SRV1", NULL, 2000);
     testCond((s == NATS_ERR) && (resp == NULL));
 
@@ -2914,6 +2926,16 @@ test_JszEach(void)
     pr.requests  = 0;
     s            = natsSysClient_JszEach(sys, "SRV1", &opts, 5000, _countJszPages, &pc);
     testCond((s == NATS_OK) && (pc.pages == 2) && (pr.requests == 2));
+
+    // The server answers a named account at every offset, so paging it would
+    // repeat that account once per JetStream account.
+    test("A named Account is a single request even with Accounts: ");
+    opts.Account = "A1";
+    memset(&pc, 0, sizeof(pc));
+    pr.requests = 0;
+    s           = natsSysClient_JszEach(sys, "SRV1", &opts, 5000, _countJszPages, &pc);
+    testCond((s == NATS_OK) && (pc.pages == 1) && (pr.requests == 1));
+    opts.Account = NULL;
 
     test("An empty page ends the walk instead of looping: ");
     pr.total        = 100;

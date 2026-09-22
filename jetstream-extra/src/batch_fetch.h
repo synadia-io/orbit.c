@@ -55,7 +55,7 @@ extern "C"
  * Mutual exclusivity (validated client-side):
  *   - `Sequence` and `StartTime` may not both be set.
  *   - `UpToSeq` and `UpToTime` may not both be set.
- *   - When `MultiLastFor` is set, `MultiLastForLen` must be > 0 and no entry may be `NULL`.
+ *   - When `MultiLastFor` is set, `MultiLastForLen` must be > 0.
  *
  * Initialise with #jsBatchFetchOptions_Init before setting fields. All
  * pointer fields are borrowed (not copied); the caller must keep them
