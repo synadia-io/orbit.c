@@ -142,6 +142,10 @@ natsJSON_Lookup(const natsJSON *json, const char *key, natsJSON **out);
 natsStatus
 natsJSON_GetStr(const natsJSON *json, const char *key, char **out);
 
+// As natsJSON_GetStr, but *out borrows the string from the tree.
+natsStatus
+natsJSON_GetStrRef(const natsJSON *json, const char *key, const char **out);
+
 // As natsJSON_GetStr, but moves the string out of the tree instead of copying
 // it; the member is left as a JSON null.
 natsStatus

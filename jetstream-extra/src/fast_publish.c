@@ -13,9 +13,9 @@
 
 #include "fast_publish.h"
 
+#include "json.h"
 #include "os_shims.h"
 
-#include <ctype.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -89,108 +89,6 @@ _reportErr(jsFastPublishCtx *ctx, natsStatus s, const char *desc)
     if (ctx == NULL || ctx->errHandler == NULL)
         return;
     ctx->errHandler(s, desc, ctx->errHandlerClosure);
-}
-
-static bool
-_jsonTypeIs(const char *data, int dataLen, const char *typeVal)
-{
-    if (data == NULL || dataLen <= 0)
-        return false;
-    char needle[64];
-    int n = snprintf(needle, sizeof(needle), "\"type\":\"%s\"", typeVal);
-    if (n < 0 || n >= (int)sizeof(needle) || dataLen < n)
-        return false;
-    for (int i = 0; i + n <= dataLen; i++)
-    {
-        if (memcmp(data + i, needle, (size_t)n) == 0)
-            return true;
-    }
-    return false;
-}
-
-static const char *
-_jsonFindValue(const char *data, int dataLen, const char *key)
-{
-    char needle[96];
-    int n = snprintf(needle, sizeof(needle), "\"%s\":", key);
-    if (n < 0 || n >= (int)sizeof(needle))
-        return NULL;
-    for (int i = 0; i + n <= dataLen; i++)
-    {
-        if (memcmp(data + i, needle, (size_t)n) == 0)
-        {
-            const char *p   = data + i + n;
-            const char *end = data + dataLen;
-            while (p < end && (*p == ' ' || *p == '\t'))
-                p++;
-            return p < end ? p : NULL;
-        }
-    }
-    return NULL;
-}
-
-static bool
-_jsonExtractUint64(const char *data, int dataLen, const char *key, uint64_t *out)
-{
-    const char *p = _jsonFindValue(data, dataLen, key);
-    if (p == NULL)
-        return false;
-    const char *end = data + dataLen;
-    uint64_t v = 0;
-    bool any = false;
-    while (p < end && isdigit((unsigned char)*p))
-    {
-        v = v * 10 + (uint64_t)(*p - '0');
-        p++;
-        any = true;
-    }
-    if (!any)
-        return false;
-    *out = v;
-    return true;
-}
-
-static bool
-_jsonExtractBool(const char *data, int dataLen, const char *key, bool *out)
-{
-    const char *p = _jsonFindValue(data, dataLen, key);
-    if (p == NULL)
-        return false;
-    const char *end = data + dataLen;
-    if (p + 4 <= end && memcmp(p, "true", 4) == 0)
-    {
-        *out = true;
-        return true;
-    }
-    if (p + 5 <= end && memcmp(p, "false", 5) == 0)
-    {
-        *out = false;
-        return true;
-    }
-    return false;
-}
-
-static bool
-_jsonExtractString(const char *data, int dataLen, const char *key, char **out)
-{
-    const char *p = _jsonFindValue(data, dataLen, key);
-    if (p == NULL || *p != '"')
-        return false;
-    p++;
-    const char *end   = data + dataLen;
-    const char *start = p;
-    while (p < end && *p != '"')
-        p++;
-    if (p >= end)
-        return false;
-    size_t len = (size_t)(p - start);
-    char  *s   = (char *)malloc(len + 1);
-    if (s == NULL)
-        return false;
-    memcpy(s, start, len);
-    s[len] = '\0';
-    *out   = s;
-    return true;
 }
 
 // Build the per-message reply subject "<replyPrefix><seq>.<op>.$FI" into
@@ -293,22 +191,30 @@ _applyMsgOpts(natsMsg *msg, jsBatchMsgOpts *opts)
     return s;
 }
 
-// Parse a commit-ack JSON body into a fresh jsPubAck compatible with
-// jsPubAck_Destroy
-static jsPubAck *
-_parseCommitAck(const char *data, int dataLen)
+// Moves a commit ack out of 'json' into a fresh jsPubAck compatible with
+// jsPubAck_Destroy. An ack without a "stream" is NATS_ERR.
+static natsStatus
+_parseCommitAck(jsPubAck **newPa, natsJSON *json)
 {
-    jsPubAck *pa = (jsPubAck *)calloc(1, sizeof(*pa));
+    natsStatus s  = NATS_OK;
+    jsPubAck   *pa = (jsPubAck *)calloc(1, sizeof(*pa));
+
     if (pa == NULL)
-        return NULL;
-    _jsonExtractString(data, dataLen, "stream", &pa->Stream);
-    _jsonExtractUint64(data, dataLen, "seq", &pa->Sequence);
-    _jsonExtractString(data, dataLen, "domain", &pa->Domain);
-    _jsonExtractBool(data, dataLen, "duplicate", &pa->Duplicate);
-    _jsonExtractString(data, dataLen, "batch", &pa->Batch);
-    _jsonExtractUint64(data, dataLen, "count", &pa->Count);
-    _jsonExtractString(data, dataLen, "val", &pa->Value);
-    return pa;
+        return NATS_NO_MEMORY;
+
+    // Missing fields keep their zero value.
+    natsJSON_TakeStr(json, "stream", &pa->Stream);
+    natsJSON_TakeStr(json, "domain", &pa->Domain);
+    natsJSON_TakeStr(json, "batch", &pa->Batch);
+    natsJSON_TakeStr(json, "val", &pa->Value);
+    natsJSON_GetUInt(json, "seq", &pa->Sequence);
+    natsJSON_GetBool(json, "duplicate", &pa->Duplicate);
+    natsJSON_GetUInt(json, "count", &pa->Count);
+    if (pa->Stream == NULL)
+        s = NATS_ERR;
+
+    *newPa = pa;
+    return s;
 }
 
 static void
@@ -322,6 +228,14 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
     int               dataLen = natsMsg_GetDataLength(msg);
     char              desc[192];
     bool              report  = false; // emit desc via the error handler after unlock
+    natsJSON         *json    = NULL;
+    natsJSON         *errObj  = NULL;
+    const char       *type    = "";
+
+    // A malformed body falls through to the commit-ack branch, which
+    // rejects it for lacking a "stream".
+    natsJSON_Parse(&json, data, dataLen);
+    natsJSON_GetStrRef(json, "type", &type);
 
     natsMutex_Lock(ctx->mu);
 
@@ -332,15 +246,16 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
     if (ctx->closed)
     {
         natsMutex_Unlock(ctx->mu);
+        natsJSON_Destroy(json);
         natsMsg_Destroy(msg);
         return;
     }
 
-    if (_jsonTypeIs(data, dataLen, "gap"))
+    if (strcmp(type, "gap") == 0)
     {
         uint64_t lastSeq = 0, curSeq = 0;
-        _jsonExtractUint64(data, dataLen, "last_seq", &lastSeq);
-        _jsonExtractUint64(data, dataLen, "seq", &curSeq);
+        natsJSON_GetUInt(json, "last_seq", &lastSeq);
+        natsJSON_GetUInt(json, "seq", &curSeq);
         snprintf(desc, sizeof(desc),
                  "fast publish gap: expected_last=%" PRIu64 " current=%" PRIu64,
                  lastSeq, curSeq);
@@ -351,37 +266,38 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
             natsCondition_Broadcast(ctx->cond);
         }
     }
-    else if (_jsonTypeIs(data, dataLen, "ack"))
+    else if (strcmp(type, "ack") == 0)
     {
         uint64_t flowAckSeq = 0;
         uint64_t newFlow    = 0;
-        _jsonExtractUint64(data, dataLen, "seq", &flowAckSeq);
-        if (_jsonExtractUint64(data, dataLen, "msgs", &newFlow) && newFlow > 0)
+        natsJSON_GetUInt(json, "seq", &flowAckSeq);
+        if (natsJSON_GetUInt(json, "msgs", &newFlow) == NATS_OK && newFlow > 0)
             ctx->flow = (uint16_t)newFlow;
         ctx->ackSequence     = flowAckSeq;
         ctx->firstAckArrived = true;
         natsCondition_Broadcast(ctx->cond);
     }
-    else if (_jsonTypeIs(data, dataLen, "err"))
+    else if (strcmp(type, "err") == 0)
     {
         uint64_t errSeq = 0;
-        _jsonExtractUint64(data, dataLen, "seq", &errSeq);
+        natsJSON_GetUInt(json, "seq", &errSeq);
         snprintf(desc, sizeof(desc),
                  "fast publish error at sequence %" PRIu64, errSeq);
         report = true;
     }
-    else if (_jsonFindValue(data, dataLen, "error") != NULL)
+    else if (natsJSON_Lookup(json, "error", &errObj) == NATS_OK)
     {
         // No type tag but an "error" object => terminal error response. It
         // carries an error object instead of a pub-ack and ends the batch
         // just as a commit does. Report it exactly once: if a commit is
         // waiting, surface it there (the commit call returns the error);
         // otherwise hand it to the async error handler.
-        uint64_t errCode  = 0;
-        char     *errDesc = NULL;
+        uint64_t   errCode  = 0;
+        const char *errDesc = NULL;
 
-        _jsonExtractUint64(data, dataLen, "err_code", &errCode);
-        _jsonExtractString(data, dataLen, "description", &errDesc);
+        natsJSON_GetStrRef(errObj, "description", &errDesc);
+
+        natsJSON_GetUInt(errObj, "err_code", &errCode);
 
         ctx->commitErr     = NATS_ERR;
         ctx->commitArrived = true;
@@ -398,7 +314,6 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
                          "fast publish rejected (err_code %" PRIu64 ")", errCode);
             report = true;
         }
-        free(errDesc);
         natsCondition_Broadcast(ctx->cond);
     }
     else
@@ -406,14 +321,7 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
         // No type tag and no error => commit ack (end of batch). A body
         // with no "stream" is not a valid pub-ack; treat it as a failed
         // commit.
-        jsPubAck *pa   = _parseCommitAck(data, dataLen);
-        ctx->commitAck = pa;
-        if (pa == NULL)
-            ctx->commitErr = NATS_NO_MEMORY;
-        else if (pa->Stream == NULL)
-            ctx->commitErr = NATS_ERR;
-        else
-            ctx->commitErr = NATS_OK;
+        ctx->commitErr     = _parseCommitAck(&ctx->commitAck, json);
         ctx->commitArrived = true;
         ctx->closed        = true;
         natsCondition_Broadcast(ctx->cond);
@@ -422,6 +330,7 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
     natsMutex_Unlock(ctx->mu);
     if (report)
         _reportErr(ctx, NATS_ERR, desc);
+    natsJSON_Destroy(json);
     natsMsg_Destroy(msg);
 }
 

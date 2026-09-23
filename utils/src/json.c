@@ -869,6 +869,25 @@ natsJSON_GetStr(const natsJSON *json, const char *key, char **out)
 }
 
 natsStatus
+natsJSON_GetStrRef(const natsJSON *json, const char *key, const char **out)
+{
+    natsJSON  *field = NULL;
+    natsStatus s;
+
+    if (out == NULL)
+        return NATS_INVALID_ARG;
+
+    s = natsJSON_Lookup(json, key, &field);
+    if (s != NATS_OK)
+        return s;
+    if (field->type != NATS_JSON_STRING)
+        return NATS_INVALID_ARG;
+
+    *out = field->v.str;
+    return NATS_OK;
+}
+
+natsStatus
 natsJSON_TakeStr(natsJSON *json, const char *key, char **out)
 {
     natsJSON  *field = NULL;
