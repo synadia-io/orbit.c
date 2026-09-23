@@ -13,10 +13,6 @@
 
 // nats-context test suite.
 //
-// Each test function is registered in list_test.txt as _test(<Name>). The
-// list.h two-pass macro system generates the forward declarations and the
-// dispatch table (same pattern as the other orbit.c sub-libraries).
-//
 // Every test starts its own nats-server (which must be on PATH), builds a
 // throwaway context config tree under a unique XDG_CONFIG_HOME, and connects
 // through natsContext_Connect.
@@ -26,222 +22,14 @@
 
 #include "context.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <errno.h>
-#include <signal.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
+#include "test.h"
+
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <dirent.h>
-
-// Test framework — mirrors the other orbit.c sub-library suites.
-
-typedef void (*testFunc)(void);
-
-typedef struct
-{
-    const char *name;
-    testFunc    func;
-
-} testInfo;
-
-#define _TEST_PROTO
-#include "list.h"
-#undef _TEST_PROTO
-
-#define _TEST_LIST
-static testInfo allTests[] = {
-#include "list.h"
-};
-#undef _TEST_LIST
-
-static int  tests  = 0;
-static bool failed = false;
-
-static const char *natsServerExe    = "nats-server";
-static bool        keepServerOutput = false;
-
-#define NATS_INVALID_PID (-1)
-#define LOGFILE_NAME     "server.log"
-
-#define FAIL(m)                    \
-    {                              \
-        printf("@@ %s @@\n", (m)); \
-        failed = true;             \
-        return;                    \
-    }
-
-#define CHECK_SERVER_STARTED(p)  \
-    if ((p) == NATS_INVALID_PID) \
-    FAIL("Unable to start or verify that the server was started!")
-
-#define test(s)                    \
-    {                              \
-        printf("#%02d ", ++tests); \
-        printf("%s", (s));         \
-        fflush(stdout);            \
-    }
-#define testCond(c)                            \
-    if (c)                                     \
-    {                                          \
-        printf("\033[0;32mPASSED\033[0;0m\n"); \
-        fflush(stdout);                        \
-    }                                          \
-    else                                       \
-    {                                          \
-        printf("\033[0;31mFAILED\033[0;0m\n"); \
-        fflush(stdout);                        \
-        failed = true;                         \
-        return;                                \
-    }
-
-// Server lifecycle — one server at a time, tracked via a global PID.
-
-typedef pid_t natsPid;
-
-static natsPid g_serverPid = NATS_INVALID_PID;
-
-static void
-_stopServer(natsPid pid)
-{
-    int status = 0;
-
-    if (pid == NATS_INVALID_PID)
-        return;
-
-    if (kill(pid, SIGINT) < 0)
-    {
-        if (kill(pid, SIGKILL) < 0)
-            return;
-    }
-
-    waitpid(pid, &status, 0);
-
-    if (pid == g_serverPid)
-        g_serverPid = NATS_INVALID_PID;
-}
-
-// _checkStart polls a TCP connection to url to verify the server is up.
-static natsStatus
-_checkStart(const char *url, int maxAttempts)
-{
-    natsConnection *nc = NULL;
-    natsStatus      s = NATS_OK;
-    int             attempts = 0;
-
-    while ((s = natsConnection_ConnectTo(&nc, url)) != NATS_OK && attempts++ < maxAttempts)
-    {
-        usleep(200 * 1000);
-    }
-
-    if (nc != NULL)
-        natsConnection_Destroy(nc);
-
-    return s;
-}
-
-static natsPid
-_startServer(const char *url, const char *cmdLineOpts, bool checkStart)
-{
-    natsPid pid = fork();
-    if (pid == -1)
-        return NATS_INVALID_PID;
-
-    if (pid == 0)
-    {
-        // Child — "nats-server <cmdLineOpts> -a 127.0.0.1 [-l server.log]"
-        char  combined[2048];
-        char *argvPtrs[64];
-        int   index = 0;
-        char *p;
-
-        snprintf(combined, sizeof(combined), "%s%s%s -a 127.0.0.1%s",
-                 natsServerExe,
-                 (cmdLineOpts != NULL ? " " : ""),
-                 (cmdLineOpts != NULL ? cmdLineOpts : ""),
-                 (keepServerOutput ? "" : " -l " LOGFILE_NAME));
-
-        p = combined;
-        while (*p != '\0')
-        {
-            while (*p == ' ' || *p == '\t')
-                *p++ = '\0';
-
-            if (*p == '\0')
-                break;
-
-            argvPtrs[index++] = p;
-            while (*p != '\0' && *p != ' ' && *p != '\t')
-                p++;
-        }
-        argvPtrs[index] = NULL;
-
-        execvp(argvPtrs[0], argvPtrs);
-        perror("exec failed");
-        _exit(1);
-    }
-
-    if (checkStart)
-    {
-        if (_checkStart(url, 10) != NATS_OK)
-        {
-            _stopServer(pid);
-            return NATS_INVALID_PID;
-        }
-    }
-
-    g_serverPid = pid;
-    return pid;
-}
-
-// Filesystem / config-tree helpers.
-
-static void
-_rmtree(const char *path)
-{
-    DIR           *dir;
-    struct stat    st;
-    struct dirent *entry;
-
-    if (stat(path, &st) != 0)
-        return;
-
-    if (!S_ISDIR(st.st_mode))
-    {
-        unlink(path);
-        return;
-    }
-
-    dir = opendir(path);
-    if (dir == NULL)
-        return;
-
-    while ((entry = readdir(dir)) != NULL)
-    {
-        char fullPath[1024];
-
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-            continue;
-
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, entry->d_name);
-        _rmtree(fullPath);
-    }
-
-    closedir(dir);
-    rmdir(path);
-}
-
-static int _uniqueCounter = 0;
 
 static bool
 _mkdirOk(const char *path)
@@ -256,7 +44,7 @@ _makeConfigTree(char *base, int baseLen)
 {
     char path[1024];
 
-    snprintf(base, baseLen, "/tmp/orbitctx_%d_%d", (int) getpid(), ++_uniqueCounter);
+    _uniqueTmpPath(base, baseLen, "/tmp/orbitctx_");
     if (!_mkdirOk(base))
         return false;
 
@@ -269,17 +57,6 @@ _makeConfigTree(char *base, int baseLen)
         return false;
 
     setenv("XDG_CONFIG_HOME", base, 1);
-    return true;
-}
-
-static bool
-_writeFile(const char *path, const char *content)
-{
-    FILE *f = fopen(path, "wb");
-    if (f == NULL)
-        return false;
-    fwrite(content, 1, strlen(content), f);
-    fclose(f);
     return true;
 }
 
@@ -340,18 +117,15 @@ _writeSelected(const char *base, const char *name)
     return _writeFile(path, name);
 }
 
-#define SERVER_URL "nats://127.0.0.1:4222"
-
-// Common teardown. Every argument is safe when unused: Destroy tolerates NULL,
-// _stopServer ignores NATS_INVALID_PID, and base may be NULL.
+// Common teardown. Every argument is safe when unused: Destroy tolerates NULL
+// and _stopServer ignores NATS_INVALID_PID. The config tree is removed by
+// testMain().
 static void
-_cleanup(natsContextSettings *settings, natsConnection *nc, natsPid pid, const char *base)
+_cleanup(natsContextSettings *settings, natsConnection *nc, natsPid pid)
 {
     natsContextSettings_Destroy(settings);
     natsConnection_Destroy(nc);
     _stopServer(pid);
-    if (base != NULL)
-        _rmtree(base);
 }
 
 // A minimal SOCKS5 proxy, forked like the server is, so that a context
@@ -673,6 +447,7 @@ _startSocksProxy(int *port, const char *user, const char *pass, const char *mark
     }
 
     close(lfd);
+    _rememberServer(pid);
     return pid;
 }
 
@@ -687,7 +462,7 @@ test_connect_by_path(void)
     natsContextSettings *settings = NULL;
     char                 base[256];
     char                 ctxPath[1024];
-    const char          *json = "{ \"url\": \"" SERVER_URL "\", \"description\": \"by path\" }";
+    const char          *json = "{ \"url\": \"" TEST_URL "\", \"description\": \"by path\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -697,7 +472,7 @@ test_connect_by_path(void)
     snprintf(ctxPath, sizeof(ctxPath), "%s/nats/context/bypath.json", base);
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -712,7 +487,7 @@ test_connect_by_path(void)
     testCond((settings != NULL) && (settings->URL != NULL) && (settings->Description != NULL) &&
              (strcmp(settings->Description, "by path") == 0));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -724,7 +499,7 @@ test_connect_by_name(void)
     natsContextSettings *settings = NULL;
     char                 base[256];
     char                 name[] = "byname";
-    const char          *json = "{ \"url\": \"" SERVER_URL "\", \"user\": \"\" }";
+    const char          *json = "{ \"url\": \"" TEST_URL "\", \"user\": \"\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -733,7 +508,7 @@ test_connect_by_name(void)
     testCond(_writeContext(base, "byname", json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -742,7 +517,7 @@ test_connect_by_name(void)
     testCond((s == NATS_OK) && (nc != NULL) &&
              (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -754,7 +529,7 @@ test_connect_selected(void)
     natsContextSettings *settings = NULL;
     char                 base[256];
     char                 empty[] = "";
-    const char          *json = "{ \"url\": \"" SERVER_URL "\" }";
+    const char          *json = "{ \"url\": \"" TEST_URL "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -763,7 +538,7 @@ test_connect_selected(void)
     testCond(_writeContext(base, "selected", json) && _writeSelected(base, "selected"));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -773,7 +548,7 @@ test_connect_selected(void)
     testCond((s == NATS_OK) && (nc != NULL) &&
              (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -791,7 +566,7 @@ test_connect_no_context(void)
     testCond(_makeConfigTree(base, sizeof(base)));
 
     test("Start default server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -804,7 +579,7 @@ test_connect_no_context(void)
     test("Settings are empty defaults: ");
     testCond((settings != NULL) && (settings->URL == NULL) && (settings->User == NULL));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -818,9 +593,9 @@ test_connect_userpass(void)
     char                 okName[]  = "auth";
     char                 badName[] = "authbad";
     const char          *okJson =
-        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\", \"password\": \"testpass\" }";
+        "{ \"url\": \"" TEST_URL "\", \"user\": \"testuser\", \"password\": \"testpass\" }";
     const char *badJson =
-        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\", \"password\": \"wrong\" }";
+        "{ \"url\": \"" TEST_URL "\", \"user\": \"testuser\", \"password\": \"wrong\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -831,12 +606,12 @@ test_connect_userpass(void)
     // Auth server: the plain readiness probe would be rejected, so start
     // without the built-in check and probe with credentials ourselves.
     test("Start auth server: ");
-    pid = _startServer(SERVER_URL, "--user testuser --pass testpass", false);
+    pid = _startServer(TEST_URL, "--user testuser --pass testpass", false);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
     test("Server ready: ");
-    testCond(_checkStart("nats://testuser:testpass@127.0.0.1:4222", 20) == NATS_OK);
+    testCond(_waitForServer("nats://testuser:testpass@127.0.0.1:4222", 4000) == NATS_OK);
 
     test("Connect with correct password: ");
     s = natsContext_Connect(&nc, &settings, okName, NULL);
@@ -852,7 +627,7 @@ test_connect_userpass(void)
     s = natsContext_Connect(&nc, &settings, badName, NULL);
     testCond((s != NATS_OK) && (nc == NULL));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -864,7 +639,7 @@ test_connect_token(void)
     natsContextSettings *settings = NULL;
     char                 base[256];
     char                 name[] = "tok";
-    const char          *json = "{ \"url\": \"" SERVER_URL "\", \"token\": \"s3cr3t\" }";
+    const char          *json = "{ \"url\": \"" TEST_URL "\", \"token\": \"s3cr3t\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -873,19 +648,19 @@ test_connect_token(void)
     testCond(_writeContext(base, "tok", json));
 
     test("Start token server: ");
-    pid = _startServer(SERVER_URL, "--auth s3cr3t", false);
+    pid = _startServer(TEST_URL, "--auth s3cr3t", false);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
     test("Server ready: ");
-    testCond(_checkStart("nats://s3cr3t@127.0.0.1:4222", 20) == NATS_OK);
+    testCond(_waitForServer("nats://s3cr3t@127.0.0.1:4222", 4000) == NATS_OK);
 
     test("Connect with token: ");
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s == NATS_OK) && (nc != NULL) &&
              (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 // socks_proxy. The proxy runs in a forked child and records the target it was
@@ -926,7 +701,7 @@ test_socks_proxy(void)
     testCond(_writeContext(base, name, json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -946,7 +721,7 @@ test_socks_proxy(void)
              (strstr(settings->SocksProxy, "socks5://127.0.0.1:") == settings->SocksProxy));
 
     _stopServer(proxyPid);
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -976,7 +751,7 @@ test_socks_proxy_auth(void)
     // The credentials are percent-escaped, the way the `nats` CLI writes a
     // password holding a '@'.
     snprintf(json, sizeof(json),
-             "{ \"url\": \"" SERVER_URL "\", "
+             "{ \"url\": \"" TEST_URL "\", "
              "\"socks_proxy\": \"socks5://u%%24er:p%%40ss@127.0.0.1:%d\" }",
              port);
 
@@ -984,7 +759,7 @@ test_socks_proxy_auth(void)
     testCond(_writeContext(base, name, json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -997,7 +772,7 @@ test_socks_proxy_auth(void)
              (strcmp(target, "127.0.0.1:4222") == 0));
 
     _stopServer(proxyPid);
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1024,7 +799,7 @@ test_socks_proxy_bad_credentials(void)
     testCond(proxyPid != NATS_INVALID_PID);
 
     snprintf(json, sizeof(json),
-             "{ \"url\": \"" SERVER_URL "\", "
+             "{ \"url\": \"" TEST_URL "\", "
              "\"socks_proxy\": \"socks5://user:wrong@127.0.0.1:%d\" }",
              port);
 
@@ -1032,7 +807,7 @@ test_socks_proxy_bad_credentials(void)
     testCond(_writeContext(base, name, json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1043,7 +818,7 @@ test_socks_proxy_bad_credentials(void)
     testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
 
     _stopServer(proxyPid);
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1072,14 +847,14 @@ test_socks_proxy_unreachable(void)
     _stopServer(proxyPid);
 
     snprintf(json, sizeof(json),
-             "{ \"url\": \"" SERVER_URL "\", \"socks_proxy\": \"socks5://127.0.0.1:%d\" }",
+             "{ \"url\": \"" TEST_URL "\", \"socks_proxy\": \"socks5://127.0.0.1:%d\" }",
              port);
 
     test("Write context file: ");
     testCond(_writeContext(base, name, json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1089,7 +864,7 @@ test_socks_proxy_unreachable(void)
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s != NATS_OK) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1101,7 +876,7 @@ test_socks_proxy_bad_url(void)
     char                 base[256];
     char                 name[] = "socksbadurl";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"socks_proxy\": \"http://127.0.0.1:8080\" }";
+        "{ \"url\": \"" TEST_URL "\", \"socks_proxy\": \"http://127.0.0.1:8080\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1116,7 +891,7 @@ test_socks_proxy_bad_url(void)
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s == NATS_ERR) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 void
@@ -1136,7 +911,7 @@ test_unknown_context(void)
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s == NATS_NOT_FOUND) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 void
@@ -1160,7 +935,7 @@ test_invalid_name(void)
     s = natsContext_Connect(&nc, &settings, sep, NULL);
     testCond((s == NATS_INVALID_ARG) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 void
@@ -1178,7 +953,7 @@ test_connect_null_name(void)
     testCond(_makeConfigTree(base, sizeof(base)));
 
     test("Start default server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1187,7 +962,7 @@ test_connect_null_name(void)
     testCond((s == NATS_OK) && (nc != NULL) &&
              (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1202,7 +977,7 @@ test_connect_multi_server(void)
     // One live server, one dead entry, plus whitespace/empty entries that
     // the splitter must skip.
     const char          *json =
-        "{ \"url\": \"" SERVER_URL ", ,nats://127.0.0.1:9999,\" }";
+        "{ \"url\": \"" TEST_URL ", ,nats://127.0.0.1:9999,\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1211,7 +986,7 @@ test_connect_multi_server(void)
     testCond(_writeContext(base, "multi", json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1224,7 +999,7 @@ test_connect_multi_server(void)
     testCond((settings != NULL) && (settings->URL != NULL) &&
              (strchr(settings->URL, ',') != NULL));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1237,7 +1012,7 @@ test_connect_with_caller_opts(void)
     natsOptions         *opts = NULL;
     char                 base[256];
     char                 name[] = "withopts";
-    const char          *json = "{ \"url\": \"" SERVER_URL "\" }";
+    const char          *json = "{ \"url\": \"" TEST_URL "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1246,7 +1021,7 @@ test_connect_with_caller_opts(void)
     testCond(_writeContext(base, "withopts", json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1271,7 +1046,7 @@ test_connect_with_caller_opts(void)
     natsOptions_Destroy(opts);
     testCond(natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED);
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 // Context values are layered on top of a caller-supplied opts, so they
@@ -1290,7 +1065,7 @@ test_context_opts_win(void)
     char                 name[] = "override";
     // The context carries the credentials the server wants.
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\","
+        "{ \"url\": \"" TEST_URL "\", \"user\": \"testuser\","
         " \"password\": \"testpass\" }";
 
     test("Setup config dir: ");
@@ -1300,12 +1075,12 @@ test_context_opts_win(void)
     testCond(_writeContext(base, "override", json));
 
     test("Start auth server: ");
-    pid = _startServer(SERVER_URL, "--user testuser --pass testpass", false);
+    pid = _startServer(TEST_URL, "--user testuser --pass testpass", false);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
     test("Server ready: ");
-    testCond(_checkStart("nats://testuser:testpass@127.0.0.1:4222", 20) == NATS_OK);
+    testCond(_waitForServer("nats://testuser:testpass@127.0.0.1:4222", 4000) == NATS_OK);
 
     // Credentials the server would reject, plus a server list pointing nowhere:
     // the context has to replace both.
@@ -1326,7 +1101,7 @@ test_context_opts_win(void)
              (natsConnection_Status(nc) == NATS_CONN_STATUS_CONNECTED));
 
     natsOptions_Destroy(opts);
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 static void
@@ -1347,7 +1122,7 @@ test_connect_retry_not_yet_connected(void)
     natsOptions         *opts = NULL;
     char                 base[256];
     char                 name[] = "retryctx";
-    const char          *json = "{ \"url\": \"" SERVER_URL "\" }";
+    const char          *json = "{ \"url\": \"" TEST_URL "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1375,7 +1150,7 @@ test_connect_retry_not_yet_connected(void)
     test("Settings are returned too: ");
     testCond((settings != NULL) && (settings->URL != NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 void
@@ -1394,8 +1169,6 @@ test_null_connection_arg(void)
     test("NULL connection out-param is NATS_INVALID_ARG: ");
     s = natsContext_Connect(NULL, &settings, name, NULL);
     testCond((s == NATS_INVALID_ARG) && (settings == NULL));
-
-    _cleanup(NULL, NULL, NATS_INVALID_PID, base);
 }
 
 // A context carrying TLS material makes TLS mandatory. Against a server with no
@@ -1428,15 +1201,15 @@ test_tls_material_requires_tls(void)
 
     test("Write context files: ");
     snprintf(caJson, sizeof(caJson),
-             "{ \"url\": \"" SERVER_URL "\", \"ca\": \"%s/" CERT_DIR "/ca.pem\" }", cwd);
+             "{ \"url\": \"" TEST_URL "\", \"ca\": \"%s/" CERT_DIR "/ca.pem\" }", cwd);
     snprintf(certJson, sizeof(certJson),
-             "{ \"url\": \"" SERVER_URL "\", \"cert\": \"%s/" CERT_DIR "/client-cert.pem\","
+             "{ \"url\": \"" TEST_URL "\", \"cert\": \"%s/" CERT_DIR "/client-cert.pem\","
              " \"key\": \"%s/" CERT_DIR "/client-key.pem\" }", cwd, cwd);
     testCond(_writeContext(base, "cactx", caJson) &&
              _writeContext(base, "certctx", certJson));
 
     test("Start plain (non-TLS) server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1448,7 +1221,7 @@ test_tls_material_requires_tls(void)
     s = natsContext_Connect(&nc, &settings, certName, NULL);
     testCond((s == NATS_SECURE_CONNECTION_WANTED) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1464,10 +1237,10 @@ test_connect_expansion(void)
     // User/password win the auth precedence, so the creds file is never
     // opened — the test only observes the expansion in the returned settings.
     const char          *envJson =
-        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\", \"password\": \"testpass\","
+        "{ \"url\": \"" TEST_URL "\", \"user\": \"testuser\", \"password\": \"testpass\","
         " \"creds\": \"$ORBIT_TEST_CREDS_DIR/user.creds\" }";
     const char          *tildeJson =
-        "{ \"url\": \"" SERVER_URL "\", \"user\": \"testuser\", \"password\": \"testpass\","
+        "{ \"url\": \"" TEST_URL "\", \"user\": \"testuser\", \"password\": \"testpass\","
         " \"creds\": \"~/user.creds\" }";
 
     test("Setup config dir: ");
@@ -1479,12 +1252,12 @@ test_connect_expansion(void)
              _writeContext(base, "expandtilde", tildeJson));
 
     test("Start auth server: ");
-    pid = _startServer(SERVER_URL, "--user testuser --pass testpass", false);
+    pid = _startServer(TEST_URL, "--user testuser --pass testpass", false);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
     test("Server ready: ");
-    testCond(_checkStart("nats://testuser:testpass@127.0.0.1:4222", 20) == NATS_OK);
+    testCond(_waitForServer("nats://testuser:testpass@127.0.0.1:4222", 4000) == NATS_OK);
 
     test("Creds is env-expanded in settings: ");
     s = natsContext_Connect(&nc, &settings, envName, NULL);
@@ -1504,7 +1277,7 @@ test_connect_expansion(void)
              (settings->Creds[0] == '~'));
 
     unsetenv("ORBIT_TEST_CREDS_DIR");
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 static char g_lastRequestReply[256];
@@ -1537,7 +1310,7 @@ test_connect_inbox_prefix(void)
     char                 base[256];
     char                 name[] = "inbox";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"inbox_prefix\": \"_CTXINBOX\" }";
+        "{ \"url\": \"" TEST_URL "\", \"inbox_prefix\": \"_CTXINBOX\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1546,7 +1319,7 @@ test_connect_inbox_prefix(void)
     testCond(_writeContext(base, "inbox", json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1565,7 +1338,7 @@ test_connect_inbox_prefix(void)
 
     natsMsg_Destroy(reply);
     natsSubscription_Destroy(sub);
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1579,7 +1352,7 @@ test_connect_null_json_fields(void)
     char                 name[] = "nulls";
     // A JSON null must read as "absent", leaving the field at its zero value.
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"user\": null, \"password\": null,"
+        "{ \"url\": \"" TEST_URL "\", \"user\": null, \"password\": null,"
         " \"tls_first\": null, \"windows_ca_certs_match\": null }";
 
     test("Setup config dir: ");
@@ -1589,7 +1362,7 @@ test_connect_null_json_fields(void)
     testCond(_writeContext(base, "nulls", json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1603,7 +1376,7 @@ test_connect_null_json_fields(void)
              (settings->TLSFirst == false) &&
              (settings->WinCertStoreCaMatch == NULL));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 // A context holding `nsc` is resolved by running `nsc generate profile <value>`.
@@ -1631,7 +1404,7 @@ test_connect_nsc_lookup(void)
     char                 args[256] = {0};
     char                 name[] = "nscctx";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+        "{ \"url\": \"" TEST_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1643,7 +1416,7 @@ test_connect_nsc_lookup(void)
     testCond(_writeContext(base, "nscctx", json));
 
     test("Start server: ");
-    pid = _startServer(SERVER_URL, NULL, true);
+    pid = _startServer(TEST_URL, NULL, true);
     CHECK_SERVER_STARTED(pid);
     testCond(true);
 
@@ -1663,7 +1436,7 @@ test_connect_nsc_lookup(void)
     testCond(_readFile(argsPath, args, sizeof(args)) &&
              (strcmp(args, "generate profile " NSC_LOOKUP "\n") == 0));
 
-    _cleanup(settings, nc, pid, base);
+    _cleanup(settings, nc, pid);
 }
 
 void
@@ -1676,7 +1449,7 @@ test_nsc_not_found(void)
     char                 emptyDir[1024];
     char                 name[] = "nscctx";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+        "{ \"url\": \"" TEST_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1693,7 +1466,7 @@ test_nsc_not_found(void)
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s == NATS_NOT_FOUND) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 void
@@ -1706,7 +1479,7 @@ test_nsc_invoke_failed(void)
     char                 name[] = "nscctx";
     const char          *script = "#!/bin/sh\necho 'nsc: no such account' >&2\nexit 1\n";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+        "{ \"url\": \"" TEST_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1721,7 +1494,7 @@ test_nsc_invoke_failed(void)
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s == NATS_ERR) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 void
@@ -1734,7 +1507,7 @@ test_nsc_bad_output(void)
     char                 name[] = "nscctx";
     const char          *script = "#!/bin/sh\necho 'not json'\n";
     const char          *json =
-        "{ \"url\": \"" SERVER_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
+        "{ \"url\": \"" TEST_URL "\", \"nsc\": \"" NSC_LOOKUP "\" }";
 
     test("Setup config dir: ");
     testCond(_makeConfigTree(base, sizeof(base)));
@@ -1749,68 +1522,11 @@ test_nsc_bad_output(void)
     s = natsContext_Connect(&nc, &settings, name, NULL);
     testCond((s == NATS_ERR) && (nc == NULL) && (settings == NULL));
 
-    _cleanup(settings, nc, NATS_INVALID_PID, base);
+    _cleanup(settings, nc, NATS_INVALID_PID);
 }
 
 int
 main(int argc, char **argv)
 {
-    const char *envStr;
-    const char *testName = NULL;
-    testFunc    f = NULL;
-    int         i;
-
-    if (argc != 2)
-    {
-        printf("@@ Usage: %s [testname]\n", argv[0]);
-        return 1;
-    }
-    testName = argv[1];
-
-    envStr = getenv("NATS_TEST_SERVER_EXE");
-    if (envStr != NULL && envStr[0] != '\0')
-        natsServerExe = envStr;
-
-    envStr = getenv("NATS_TEST_KEEP_SERVER_OUTPUT");
-    if (envStr != NULL && envStr[0] != '\0')
-        keepServerOutput = true;
-
-    if (nats_Open(-1) != NATS_OK)
-    {
-        printf("@@ Unable to run tests: unable to initialize the library!\n");
-        return 1;
-    }
-
-    for (i = 0; i < (int) (sizeof(allTests) / sizeof(allTests[0])); i++)
-    {
-        if (strcmp(testName, allTests[i].name) != 0)
-            continue;
-
-        printf("\033[0;34m\n== %s ==\n\033[0;0m", allTests[i].name);
-        f = allTests[i].func;
-        f();
-        break;
-    }
-
-    if (f == NULL)
-    {
-        printf("@@ Test '%s' not found!\n", testName);
-        return 1;
-    }
-
-    if (g_serverPid != NATS_INVALID_PID)
-        _stopServer(g_serverPid);
-
-    remove(LOGFILE_NAME);
-
-    nats_CloseAndWait(failed ? 1 : 2000);
-
-    if (failed)
-    {
-        printf("*** TEST FAILED ***\n");
-        return 1;
-    }
-
-    printf("ALL PASSED\n");
-    return 0;
+    return testMain(argc, argv);
 }

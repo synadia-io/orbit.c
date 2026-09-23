@@ -13,10 +13,6 @@
 
 // nats-counters test suite.
 //
-// Each test function is registered in list_test.txt as _test(<Name>).
-// The list.h two-pass macro system generates forward declarations and the
-// dispatch table (same pattern as nats.c/test).
-//
 // Run a single test:
 //   ./testsuite ParseValueValid
 // Run all tests:
@@ -25,262 +21,7 @@
 #include "nats_counters.h"
 #include "parser.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#include <signal.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <dirent.h>
-
-// Test framework — mirrors nats.c/test conventions.
-
-typedef void (*testFunc)(void);
-
-typedef struct
-{
-    const char *name;
-    testFunc   func;
-
-} testInfo;
-
-#define _TEST_PROTO
-#include "list.h"
-#undef _TEST_PROTO
-
-#define _TEST_LIST
-static testInfo allTests[] = {
-#include "list.h"
-};
-#undef _TEST_LIST
-
-static int tests = 0;
-static bool failed = false;
-
-static const char *natsServerExe = "nats-server";
-static bool keepServerOutput = false;
-
-#define NATS_INVALID_PID (-1)
-#define LOGFILE_NAME     "server.log"
-
-#define FAIL(m)                    \
-    {                              \
-        printf("@@ %s @@\n", (m)); \
-        failed = true;             \
-        return;                    \
-    }
-
-#define CHECK_SERVER_STARTED(p)  \
-    if ((p) == NATS_INVALID_PID) \
-    FAIL("Unable to start or verify that the server was started!")
-
-#define test(s)                    \
-    {                              \
-        printf("#%02d ", ++tests); \
-        printf("%s", (s));         \
-        fflush(stdout);            \
-    }
-#define testCond(c)                            \
-    if (c)                                     \
-    {                                          \
-        printf("\033[0;32mPASSED\033[0;0m\n"); \
-        fflush(stdout);                        \
-    }                                          \
-    else                                       \
-    {                                          \
-        printf("\033[0;31mFAILED\033[0;0m\n"); \
-        fflush(stdout);                        \
-        failed = true;                         \
-        return;                                \
-    }
-
-// Server lifecycle — simplified from nats.c/test/test.h.
-//
-// We cannot use nats.c internal APIs (natsMutex, natsHash, etc.) so we track
-// at most one server PID at a time via a simple global.
-
-typedef pid_t natsPid;
-
-static natsPid g_serverPid = NATS_INVALID_PID;
-
-static void
-_stopServer(natsPid pid)
-{
-    int status = 0;
-
-    if (pid == NATS_INVALID_PID)
-        return;
-
-    if (kill(pid, SIGINT) < 0)
-    {
-        if (kill(pid, SIGKILL) < 0)
-            return;
-    }
-
-    waitpid(pid, &status, 0);
-
-    if (pid == g_serverPid)
-        g_serverPid = NATS_INVALID_PID;
-}
-
-// _checkStart attempts a TCP connection to url to verify the server is up.
-static natsStatus
-_checkStart(const char *url, int maxAttempts)
-{
-    natsConnection *nc = NULL;
-    natsStatus s = NATS_OK;
-    int attempts = 0;
-
-    while ((s = natsConnection_ConnectTo(&nc, url)) != NATS_OK && attempts++ < maxAttempts)
-    {
-        usleep(200 * 1000);
-    }
-
-    if (nc != NULL)
-        natsConnection_Destroy(nc);
-
-    return s;
-}
-
-static natsPid
-_startServer(const char *url, const char *cmdLineOpts, bool checkStart)
-{
-    natsPid pid = fork();
-    if (pid == -1)
-        return NATS_INVALID_PID;
-
-    if (pid == 0)
-    {
-        // Child — build argv from "nats-server <cmdLineOpts> -a 127.0.0.1 [-l server.log]"
-        char combined[2048];
-        char *argvPtrs[64];
-        int index = 0;
-
-        snprintf(combined, sizeof(combined), "%s%s%s -a 127.0.0.1%s",
-                 natsServerExe,
-                 (cmdLineOpts != NULL ? " " : ""),
-                 (cmdLineOpts != NULL ? cmdLineOpts : ""),
-                 (keepServerOutput ? "" : " -l " LOGFILE_NAME));
-
-        // Tokenize in-place.
-        char *p = combined;
-        while (*p != '\0')
-        {
-            while (*p == ' ' || *p == '\t')
-                *p++ = '\0';
-
-            if (*p == '\0')
-                break;
-
-            argvPtrs[index++] = p;
-            while (*p != '\0' && *p != ' ' && *p != '\t')
-                p++;
-        }
-        argvPtrs[index] = NULL;
-
-        execvp(argvPtrs[0], argvPtrs);
-        perror("exec failed");
-        _exit(1);
-    }
-
-    // Parent — optionally wait for the server to become reachable.
-    if (checkStart)
-    {
-        if (_checkStart(url, 10) != NATS_OK)
-        {
-            _stopServer(pid);
-            return NATS_INVALID_PID;
-        }
-    }
-
-    g_serverPid = pid;
-    return pid;
-}
-
-// Filesystem helpers
-
-static void
-_rmtree(const char *path)
-{
-    DIR *dir;
-    struct stat st;
-    struct dirent *entry;
-
-    if (stat(path, &st) != 0)
-        return;
-
-    if (!S_ISDIR(st.st_mode))
-    {
-        unlink(path);
-        return;
-    }
-
-    dir = opendir(path);
-    if (dir == NULL)
-        return;
-
-    while ((entry = readdir(dir)) != NULL)
-    {
-        char fullPath[1024];
-
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-            continue;
-
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, entry->d_name);
-        _rmtree(fullPath);
-    }
-
-    closedir(dir);
-    rmdir(path);
-}
-
-// Generate a unique directory name using PID and an incrementing counter.
-static int _uniqueCounter = 0;
-
-static void
-_makeUniqueDir(char *buf, int bufLen, const char *prefix)
-{
-    snprintf(buf, bufLen, "%s%d_%d", prefix, (int)getpid(), ++_uniqueCounter);
-}
-
-// JetStream setup / teardown macros
-//
-// JS_SETUP declares local variables, starts a nats-server with -js, connects,
-// and creates a JetStream context.
-//
-// JS_TEARDOWN cleans up all resources.
-
-#define JS_SETUP                                                 \
-    natsStatus s = NATS_OK;                                      \
-    natsConnection *nc = NULL;                                   \
-    jsCtx *js = NULL;                                            \
-    natsPid pid = NATS_INVALID_PID;                              \
-    char datastore[256] = { '\0' };                              \
-    char cmdLine[1024] = { '\0' };                               \
-                                                                 \
-    _makeUniqueDir(datastore, sizeof(datastore), "datastore_");  \
-    test("Start JS Server: ");                                   \
-    snprintf(cmdLine, sizeof(cmdLine), "-js -sd %s", datastore); \
-    pid = _startServer("nats://127.0.0.1:4222", cmdLine, true);  \
-    CHECK_SERVER_STARTED(pid);                                   \
-    testCond(true);                                              \
-                                                                 \
-    test("Connect: ");                                           \
-    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");  \
-    testCond(s == NATS_OK);                                      \
-                                                                 \
-    test("Get context: ");                                       \
-    s = natsConnection_JetStream(&js, nc, NULL);                 \
-    testCond(s == NATS_OK);
-
-#define JS_TEARDOWN             \
-    jsCtx_Destroy(js);          \
-    natsConnection_Destroy(nc); \
-    _stopServer(pid);           \
-    _rmtree(datastore);
+#include "test.h"
 
 // Stream helper — creates a counter-ready stream for the given subject.
 
@@ -508,30 +249,10 @@ test_ParseIncrementInvalid(void)
 void
 test_CounterGetFromStreamDirectNotEnabled(void)
 {
-    natsStatus s = NATS_OK;
     jsStreamConfig cfg;
     natsCounter *c = NULL;
 
-    natsConnection *nc = NULL;
-    jsCtx *js = NULL;
-    natsPid pid = NATS_INVALID_PID;
-    char datastore[256] = { '\0' };
-    char cmdLine[1024] = { '\0' };
-
-    _makeUniqueDir(datastore, sizeof(datastore), "datastore_");
-    test("Start JS Server: ");
-    snprintf(cmdLine, sizeof(cmdLine), "-js -sd %s", datastore);
-    pid = _startServer("nats://127.0.0.1:4222", cmdLine, true);
-    CHECK_SERVER_STARTED(pid);
-    testCond(true);
-
-    test("Connect: ");
-    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");
-    testCond(s == NATS_OK);
-
-    test("Get context: ");
-    s = natsConnection_JetStream(&js, nc, NULL);
-    testCond(s == NATS_OK);
+    JS_SETUP;
 
     test("Create stream without AllowDirect: ");
     jsStreamConfig_Init(&cfg);
@@ -552,30 +273,10 @@ test_CounterGetFromStreamDirectNotEnabled(void)
 void
 test_CounterGetFromStreamCounterNotEnabled(void)
 {
-    natsStatus s = NATS_OK;
     jsStreamConfig cfg;
     natsCounter *c = NULL;
 
-    natsConnection *nc = NULL;
-    jsCtx *js = NULL;
-    natsPid pid = NATS_INVALID_PID;
-    char datastore[256] = { '\0' };
-    char cmdLine[1024] = { '\0' };
-
-    _makeUniqueDir(datastore, sizeof(datastore), "datastore_");
-    test("Start JS Server: ");
-    snprintf(cmdLine, sizeof(cmdLine), "-js -sd %s", datastore);
-    pid = _startServer("nats://127.0.0.1:4222", cmdLine, true);
-    CHECK_SERVER_STARTED(pid);
-    testCond(true);
-
-    test("Connect: ");
-    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");
-    testCond(s == NATS_OK);
-
-    test("Get context: ");
-    s = natsConnection_JetStream(&js, nc, NULL);
-    testCond(s == NATS_OK);
+    JS_SETUP;
 
     test("Create stream without AllowMsgCounter: ");
     jsStreamConfig_Init(&cfg);
@@ -1108,69 +809,11 @@ test_CounterDestroyNull(void)
 }
 
 //=============================================================================
-// main — dispatch a single test by name (same as nats.c/test).
+// main
 //=============================================================================
 
 int
 main(int argc, char **argv)
 {
-    const char *envStr;
-    const char *testName = NULL;
-    testFunc f = NULL;
-    int i;
-
-    if (argc != 2)
-    {
-        printf("@@ Usage: %s [testname]\n", argv[0]);
-        return 1;
-    }
-    testName = argv[1];
-
-    envStr = getenv("NATS_TEST_SERVER_EXE");
-    if (envStr != NULL && envStr[0] != '\0')
-        natsServerExe = envStr;
-
-    envStr = getenv("NATS_TEST_KEEP_SERVER_OUTPUT");
-    if (envStr != NULL && envStr[0] != '\0')
-        keepServerOutput = true;
-
-    if (nats_Open(-1) != NATS_OK)
-    {
-        printf("@@ Unable to run tests: unable to initialize the library!\n");
-        return 1;
-    }
-
-    for (i = 0; i < (int)(sizeof(allTests) / sizeof(allTests[0])); i++)
-    {
-        if (strcmp(testName, allTests[i].name) != 0)
-            continue;
-
-        printf("\033[0;34m\n== %s ==\n\033[0;0m", allTests[i].name);
-        f = allTests[i].func;
-        f();
-        break;
-    }
-
-    if (f == NULL)
-    {
-        printf("@@ Test '%s' not found!\n", testName);
-        return 1;
-    }
-
-    // Kill any leftover server.
-    if (g_serverPid != NATS_INVALID_PID)
-        _stopServer(g_serverPid);
-
-    remove(LOGFILE_NAME);
-
-    nats_CloseAndWait(failed ? 1 : 2000);
-
-    if (failed)
-    {
-        printf("*** TEST FAILED ***\n");
-        return 1;
-    }
-
-    printf("ALL PASSED\n");
-    return 0;
+    return testMain(argc, argv);
 }
