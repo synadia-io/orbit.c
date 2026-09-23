@@ -451,9 +451,10 @@ _deliverPage(void *page, int *offset, int *total, bool refresh, bool paged,
     *stop = (!wantMore || !paged || (n == 0) || (*offset >= *total));
 }
 
-// Fetches one page by ID and delivers it.
+// Fetches one page by ID and delivers it. The page's offset is written into
+// 'opts', which must be the walk's own copy of the options.
 static natsStatus
-_walkPage(natsSysClient *client, const char *serverID, const void *opts, int *offset,
+_walkPage(natsSysClient *client, const char *serverID, void *opts, int *offset,
           int *total, bool refresh, bool paged, int64_t deadline, sysPageHandler handler,
           void *closure, const sysWalkOps *ops, bool *stop)
 {
@@ -465,7 +466,8 @@ _walkPage(natsSysClient *client, const char *serverID, const void *opts, int *of
     if (left <= 0)
         return NATS_TIMEOUT;
 
-    s = ops->Fetch(&page, client, serverID, opts, *offset, left);
+    WALK_INT(opts, ops->OffsetOff) = *offset;
+    s = sysclient_request(&page, client, serverID, opts, left, ops->Endpoint);
     if (s != NATS_OK)
         return s;
 
@@ -480,6 +482,7 @@ sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts
 {
     natsStatus s;
     int64_t    deadline;
+    void      *pageOpts;
     int        offset;
     int        total = 0;
     bool       paged;
@@ -492,19 +495,26 @@ sysclient_walkEach(natsSysClient *client, const char *serverID, const void *opts
     if (s != NATS_OK)
         return s;
 
+    // A shallow copy, zeroed for defaults, that carries each page's offset;
+    // the caller's strings outlive the call.
+    pageOpts = NATS_CALLOC(1, ops->OptsSize);
+    if (pageOpts == NULL)
+        return NATS_NO_MEMORY;
+    if (opts != NULL)
+        memcpy(pageOpts, opts, ops->OptsSize);
+
     deadline = natsSys_NowMs() + timeout;
-    offset   = (opts != NULL) ? WALK_INT(opts, ops->OffsetOff) : 0;
+    offset   = WALK_INT(pageOpts, ops->OffsetOff);
     paged    = _isPaged(ops, opts);
 
     do
     {
-        s = _walkPage(client, serverID, opts, &offset, &total, true, paged, deadline,
+        s = _walkPage(client, serverID, pageOpts, &offset, &total, true, paged, deadline,
                       handler, closure, ops, &stop);
-        if (s != NATS_OK)
-            return s;
-    } while (!stop);
+    } while ((s == NATS_OK) && !stop);
 
-    return NATS_OK;
+    NATS_FREE(pageOpts);
+    return s;
 }
 
 const char *

@@ -212,22 +212,6 @@ natsSysSubszRespList_Destroy(natsSysSubszRespList *list)
                        &_endpoint);
 }
 
-// sysWalkOps.Fetch: the offset is advanced on a shallow copy of the options.
-static natsStatus
-_fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
-       int offset, int64_t timeout)
-{
-    natsSysSubszOptions pageOpts;
-
-    if (optsv != NULL)
-        pageOpts = *(const natsSysSubszOptions *) optsv;
-    else
-        natsSysSubszOptions_Init(&pageOpts);
-    pageOpts.Offset = offset;
-
-    return natsSysClient_Subsz((natsSysSubszResp **) page, client, serverID, &pageOpts, timeout);
-}
-
 static const sysWalkOps _walkOps = {
     &_endpoint,
     sizeof(natsSysSubszOptions),
@@ -236,7 +220,6 @@ static const sysWalkOps _walkOps = {
     SYS_INT_OFF(natsSysSubszResp, Subsz.Total),
     _copyOptions,
     _freeOptionsCopy,
-    _fetch,
     NULL,
 };
 

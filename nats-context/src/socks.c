@@ -23,8 +23,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define IFOK(s, c)      if (s == NATS_OK) { s = (c); }
-
 // The handshake needs a budget of its own: the connect timeout in natsOptions
 // bounds the dialing nats.c does itself, and nats.c does not apply it around a
 // proxy handler, so nothing else limits how long an unresponsive proxy can

@@ -55,6 +55,9 @@ typedef pthread_once_t natsSysOnce;
 #define NATS_SYS_ONCE_INIT PTHREAD_ONCE_INIT
 #endif
 
+#define IFOK(s, c) \
+    if (s == NATS_OK) { s = (c); }
+
 #define nats_IsStringEmpty(s) ((((s) == NULL) || ((s)[0] == '\0')) ? true : false)
 
 // Milliseconds from the monotonic clock, for deadlines computed as

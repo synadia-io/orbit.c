@@ -14,6 +14,7 @@
 #include "fast_publish.h"
 
 #include "json.h"
+#include "msg.h"
 #include "os_shims.h"
 
 #include <inttypes.h>
@@ -102,32 +103,6 @@ _buildReply(jsFastPublishCtx *ctx, uint64_t seq, int op)
     return ctx->replySubj;
 }
 
-static natsStatus
-_copyHeaders(natsMsg *dst, natsMsg *src)
-{
-    const char **keys     = NULL;
-    int          keyCount = 0;
-
-    natsStatus s = natsMsgHeader_Keys(src, &keys, &keyCount);
-    if (s == NATS_NOT_FOUND)
-        return NATS_OK; // src carries no headers
-    if (s != NATS_OK)
-        return s;
-
-    for (int i = 0; s == NATS_OK && i < keyCount; i++)
-    {
-        const char **vals     = NULL;
-        int          valCount = 0;
-
-        s = natsMsgHeader_Values(src, keys[i], &vals, &valCount);
-        for (int j = 0; s == NATS_OK && j < valCount; j++)
-            s = natsMsgHeader_Add(dst, keys[i], vals[j]);
-        free((void *)vals);
-    }
-    free((void *)keys);
-    return s;
-}
-
 // Builds the wire message for one batch entry. A caller-supplied message
 // is cloned into a fresh natsMsg carrying the fast-publish reply inside
 // the message's single allocation, leaving the caller's message
@@ -147,7 +122,7 @@ _prepareMsg(natsMsg **out, const char *reply, const char *subject,
     natsStatus s = natsMsg_Create(out, subject, reply, (const char *)data, dataLen);
     if (s == NATS_OK && userMsg != NULL)
     {
-        s = _copyHeaders(*out, userMsg);
+        s = natsMsg_CopyHeaders(*out, userMsg);
         if (s != NATS_OK)
         {
             natsMsg_Destroy(*out);
