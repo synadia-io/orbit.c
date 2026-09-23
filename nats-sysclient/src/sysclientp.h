@@ -119,7 +119,7 @@ typedef struct
     natsStatus (*CopyOptions)(void *dst, const void *src);
     void (*FreeOptions)(void *opts);
 
-    // Whether 'opts' (NULL meaning defaults) pages; NULL means always.
+    // Whether the walk's own copy of the options pages; NULL means always.
     bool (*Paged)(const void *opts);
 
 } sysWalkOps;
@@ -152,7 +152,6 @@ typedef struct
     void             *opts;     // deep copy
     void             *first;    // the ping's page, until delivered
     int               total;    // from the first page, never refreshed
-    int               offset;   // of the next page
     bool              done;
 
 } sysWalk;

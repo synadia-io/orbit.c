@@ -26,6 +26,7 @@ function(orbit_add_testsuite target lib)
     ${PROJECT_SOURCE_DIR}/utils/test)
 
   set(list ${CMAKE_CURRENT_SOURCE_DIR}/list_test.txt)
+  target_compile_definitions(${target} PRIVATE ORBIT_TEST_LIST="${list}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${list})
   file(STRINGS ${list} entries)
 

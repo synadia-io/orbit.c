@@ -2683,7 +2683,7 @@ test_JszPingEach(void)
 
 // The system-account counterpart to SETUP: writes 'conf' to 'file', starts a
 // server on it with 'args', connects on the system account and creates a
-// client. Declares s/nc/sys/pid, exactly as SETUP does.
+// client. Declares s/nc/sys/pid, exactly as SETUP does; pair with TEARDOWN.
 #define SETUP_SYS(conf, file, args)                        \
     natsStatus      s   = NATS_OK;                         \
     natsConnection *nc  = NULL;                            \
@@ -2707,11 +2707,6 @@ test_JszPingEach(void)
     s = natsSysClient_Create(&sys, nc, NULL);              \
     _rememberClient(sys);                                  \
     testCond(s == NATS_OK)
-
-#define TEARDOWN_SYS     \
-    _destroyClient(sys); \
-    _destroyConn(nc);    \
-    _stopServer(pid)
 
 static const char *SYS_CONF =
     "port: 4222\n"
@@ -2769,7 +2764,7 @@ test_HealthzRealServer(void)
 
     natsSysHealthzResp_Destroy(resp);
     natsSysHealthzRespList_Destroy(&list);
-    TEARDOWN_SYS;
+    TEARDOWN;
 }
 
 // Decoding a payload the real server actually produced, rather than one this
@@ -2834,7 +2829,7 @@ test_VarzStatszRealServer(void)
     natsSysVarzResp_Destroy(varz);
     natsSysStatszRespList_Destroy(&statszes);
     natsSysVarzRespList_Destroy(&varzes);
-    TEARDOWN_SYS;
+    TEARDOWN;
 }
 
 // Pagination against the server's own paging, rather than a stand-in that
@@ -2918,7 +2913,7 @@ test_ConnzSubszRealServer(void)
     natsSubscription_Destroy(sub);
     for (i = 0; i < REAL_CONNS; i++)
         _destroyConn(extras[i]);
-    TEARDOWN_SYS;
+    TEARDOWN;
 }
 
 // JSZ against a real JetStream server, so the account pagination runs against
@@ -2939,11 +2934,7 @@ static const char *JS_CONF =
 void
 test_JszRealServer(void)
 {
-    natsStatus        s;
-    natsConnection   *nc        = NULL;
     natsConnection   *accts[3]  = {NULL, NULL, NULL};
-    natsSysClient    *sys       = NULL;
-    natsPid           pid       = NATS_INVALID_PID;
     natsSysJszResp   *jsz       = NULL;
     natsSysJszOptions opts;
     pageCounter       pc;
@@ -2953,24 +2944,11 @@ test_JszRealServer(void)
     int               accounts;
     int               i;
 
-    test("Write a JetStream config with three accounts: ");
-    _rememberPath(JS_CONF_FILE);
-    testCond(_writeFile(JS_CONF_FILE, JS_CONF));
-
-    test("Start the server: ");
     // The store directory is supplied per run so repeated runs cannot collide.
     _uniqueTmpPath(storeDir, (int) sizeof(storeDir), "datastore_jsz_");
     snprintf(cmdline, sizeof(cmdline), "-c %s -js -sd %s", JS_CONF_FILE, storeDir);
-    pid = _startServer(SYS_URL, cmdline, true);
-    CHECK_SERVER_STARTED(pid);
-    testCond(true);
 
-    test("Connect and create the client: ");
-    s = _connect(&nc, SYS_URL);
-    if (s == NATS_OK)
-        s = natsSysClient_Create(&sys, nc, NULL);
-    _rememberClient(sys);
-    testCond(s == NATS_OK);
+    SETUP_SYS(JS_CONF, JS_CONF_FILE, cmdline);
 
     test("Activate each JetStream account: ");
     // An account only shows up in JSZ once it has been used, so connect one
@@ -3064,9 +3042,7 @@ test_JszRealServer(void)
     natsSysJszResp_Destroy(jsz);
     for (i = 0; i < 3; i++)
         _destroyConn(accts[i]);
-    _destroyClient(sys);
-    _destroyConn(nc);
-    _stopServer(pid);
+    TEARDOWN;
 }
 
 //

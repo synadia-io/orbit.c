@@ -121,6 +121,18 @@ test_ParseValueInvalidNumber(void)
 }
 
 void
+test_ParseValueEmbeddedNul(void)
+{
+    natsStatus s;
+    char *value = NULL;
+    const unsigned char body[] = "{\"val\":\"12\\u00003\"}";
+
+    test("Parse value with escaped NUL returns error: ");
+    s = natsCounterParser_ParseValue(body, sizeof(body) - 1, &value);
+    testCond(s == NATS_ERR);
+}
+
+void
 test_ParsePubAckValue(void)
 {
     natsStatus s;

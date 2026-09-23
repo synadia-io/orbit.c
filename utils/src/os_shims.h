@@ -126,19 +126,19 @@ natsStatus natsSys_SockParseIP(const char *host, unsigned char *ip, int *len);
 // Closes 'fd'; NATS_SYS_SOCK_INVALID is a no-op.
 void natsSys_SockClose(natsSock fd);
 
-natsStatus natsMutex_Create(natsMutex **newMutex);
-bool       natsMutex_TryLock(natsMutex *m);
-void       natsMutex_Lock(natsMutex *m);
-void       natsMutex_Unlock(natsMutex *m);
-void       natsMutex_Destroy(natsMutex *m);
+natsStatus orbitMutex_Create(orbitMutex **newMutex);
+bool       orbitMutex_TryLock(orbitMutex *m);
+void       orbitMutex_Lock(orbitMutex *m);
+void       orbitMutex_Unlock(orbitMutex *m);
+void       orbitMutex_Destroy(orbitMutex *m);
 
-natsStatus natsCondition_Create(natsCondition **cond);
-void       natsCondition_Wait(natsCondition *cond, natsMutex *mutex);
-natsStatus natsCondition_TimedWait(natsCondition *cond, natsMutex *mutex, int64_t timeout);
-natsStatus natsCondition_AbsoluteTimedWait(natsCondition *cond, natsMutex *mutex, int64_t absoluteTime);
-void       natsCondition_Signal(natsCondition *cond);
-void       natsCondition_Broadcast(natsCondition *cond);
-void       natsCondition_Destroy(natsCondition *cond);
+natsStatus orbitCondition_Create(orbitCondition **cond);
+void       orbitCondition_Wait(orbitCondition *cond, orbitMutex *mutex);
+natsStatus orbitCondition_TimedWait(orbitCondition *cond, orbitMutex *mutex, int64_t timeout);
+natsStatus orbitCondition_AbsoluteTimedWait(orbitCondition *cond, orbitMutex *mutex, int64_t absoluteTime);
+void       orbitCondition_Signal(orbitCondition *cond);
+void       orbitCondition_Broadcast(orbitCondition *cond);
+void       orbitCondition_Destroy(orbitCondition *cond);
 
 #ifdef __cplusplus
 }

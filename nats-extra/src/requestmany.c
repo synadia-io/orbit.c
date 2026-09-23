@@ -21,6 +21,9 @@
 // Default overall deadline, in milliseconds, used when opts->timeout is 0.
 #define DEFAULT_REQUEST_MANY_TIMEOUT 5000
 
+// Timeouts are capped so that now + timeout cannot overflow an int64.
+#define MAX_REQUEST_MANY_TIMEOUT ((uint64_t)7 * 24 * 60 * 60 * 1000)
+
 natsStatus
 natsRequestManyOpts_Init(natsRequestManyOpts *opts)
 {
@@ -96,6 +99,8 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
 
     count    = opts->Count;
     timeout  = (opts->Timeout == 0) ? DEFAULT_REQUEST_MANY_TIMEOUT : opts->Timeout;
+    if (timeout > MAX_REQUEST_MANY_TIMEOUT)
+        timeout = MAX_REQUEST_MANY_TIMEOUT;
     deadline = natsSys_NowMs() + (int64_t)timeout;
 
     while (s == NATS_OK)
@@ -112,7 +117,7 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
         // The stall timer measures the gap since the last reply, so it only
         // applies once at least one reply has arrived. Until then the wait is
         // bounded solely by the overall deadline.
-        stallBound = (opts->Stall > 0 && list->Count > 0 && (int64_t)opts->Stall < leftMs);
+        stallBound = (opts->Stall > 0 && list->Count > 0 && opts->Stall < (uint64_t)leftMs);
 
         s = natsSubscription_NextMsg(&nextMsg, sub, stallBound ? (int64_t)opts->Stall : leftMs);
         if (s != NATS_OK)

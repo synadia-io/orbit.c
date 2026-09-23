@@ -1,1 +1,1 @@
-orbit_add_testsuite(nats_context_testsuite nats_context)
+orbit_add_testsuite(nats_context_testsuite nats_context PREFIX ctx_)

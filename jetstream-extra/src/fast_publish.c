@@ -52,8 +52,8 @@ enum
 
 struct __jsFastPublishCtx
 {
-    natsMutex      *mu;
-    natsCondition  *cond;
+    orbitMutex     *mu;
+    orbitCondition *cond;
 
     natsConnection *nc;
 
@@ -203,16 +203,19 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
     int               dataLen = natsMsg_GetDataLength(msg);
     char              desc[192];
     bool              report  = false; // emit desc via the error handler after unlock
+    natsStatus        repErr  = NATS_ERR;
+    natsStatus        ps      = NATS_NO_RESPONDERS;
     natsJSON         *json    = NULL;
     natsJSON         *errObj  = NULL;
     const char       *type    = "";
 
-    // A malformed body falls through to the commit-ack branch, which
-    // rejects it for lacking a "stream".
-    natsJSON_Parse(&json, data, dataLen);
+    // A body parsed as JSON but lacking "stream" falls through to the
+    // commit-ack branch, which rejects it.
+    if (!natsMsg_IsNoResponders(msg))
+        ps = natsJSON_Parse(&json, data, dataLen);
     natsJSON_GetStrRef(json, "type", &type);
 
-    natsMutex_Lock(ctx->mu);
+    orbitMutex_Lock(ctx->mu);
 
     // Once the batch is closed the ack subscription is still live and may
     // deliver late or duplicate control messages. Ignore them: a second
@@ -220,13 +223,29 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
     // change is ever correct after close.
     if (ctx->closed)
     {
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         natsJSON_Destroy(json);
         natsMsg_Destroy(msg);
         return;
     }
 
-    if (strcmp(type, "gap") == 0)
+    if (ps != NATS_OK)
+    {
+        // No responders, or an ack that could not be read: the batch state
+        // is unknown, so end it as a failed commit would.
+        ctx->commitErr     = ps;
+        ctx->commitArrived = true;
+        ctx->closed        = true;
+        if (!ctx->commitPending)
+        {
+            snprintf(desc, sizeof(desc), "fast publish ack unusable: %s",
+                     natsStatus_GetText(ps));
+            repErr = ps;
+            report = true;
+        }
+        orbitCondition_Broadcast(ctx->cond);
+    }
+    else if (strcmp(type, "gap") == 0)
     {
         uint64_t lastSeq = 0, curSeq = 0;
         natsJSON_GetUInt(json, "last_seq", &lastSeq);
@@ -238,7 +257,7 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
         if (!ctx->continueOnGap)
         {
             ctx->closed = true;
-            natsCondition_Broadcast(ctx->cond);
+            orbitCondition_Broadcast(ctx->cond);
         }
     }
     else if (strcmp(type, "ack") == 0)
@@ -250,7 +269,7 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
             ctx->flow = (uint16_t)newFlow;
         ctx->ackSequence     = flowAckSeq;
         ctx->firstAckArrived = true;
-        natsCondition_Broadcast(ctx->cond);
+        orbitCondition_Broadcast(ctx->cond);
     }
     else if (strcmp(type, "err") == 0)
     {
@@ -289,7 +308,7 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
                          "fast publish rejected (err_code %" PRIu64 ")", errCode);
             report = true;
         }
-        natsCondition_Broadcast(ctx->cond);
+        orbitCondition_Broadcast(ctx->cond);
     }
     else
     {
@@ -299,12 +318,12 @@ _onAck(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closure)
         ctx->commitErr     = _parseCommitAck(&ctx->commitAck, json);
         ctx->commitArrived = true;
         ctx->closed        = true;
-        natsCondition_Broadcast(ctx->cond);
+        orbitCondition_Broadcast(ctx->cond);
     }
 
-    natsMutex_Unlock(ctx->mu);
+    orbitMutex_Unlock(ctx->mu);
     if (report)
-        _reportErr(ctx, NATS_ERR, desc);
+        _reportErr(ctx, repErr, desc);
     natsJSON_Destroy(json);
     natsMsg_Destroy(msg);
 }
@@ -359,9 +378,9 @@ jsFastPublishCtx_Create(jsFastPublishCtx **out, natsConnection *nc,
         ctx->errHandlerClosure  = opts->ErrHandlerClosure;
     }
 
-    natsStatus s = natsMutex_Create(&ctx->mu);
+    natsStatus s = orbitMutex_Create(&ctx->mu);
     if (s == NATS_OK)
-        s = natsCondition_Create(&ctx->cond);
+        s = orbitCondition_Create(&ctx->cond);
     if (s != NATS_OK)
     {
         jsFastPublish_Destroy(ctx);
@@ -461,18 +480,18 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
     natsStatus s;
     natsMsg   *msg = NULL;
 
-    natsMutex_Lock(ctx->mu);
+    orbitMutex_Lock(ctx->mu);
 
     if (ctx->closed)
     {
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
 
     s = _ensureInbox(ctx);
     if (s != NATS_OK)
     {
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return s;
     }
 
@@ -485,7 +504,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
     if (s != NATS_OK)
     {
         ctx->sequence--;
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return s;
     }
 
@@ -522,7 +541,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
             // _prepareMsg failure path above.
             ctx->sequence--;
         }
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return s;
     }
 
@@ -537,14 +556,14 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
             if (remaining <= 0)
             {
                 ctx->closed = true;
-                natsMutex_Unlock(ctx->mu);
+                orbitMutex_Unlock(ctx->mu);
                 return NATS_TIMEOUT;
             }
-            natsCondition_TimedWait(ctx->cond, ctx->mu, remaining);
+            orbitCondition_TimedWait(ctx->cond, ctx->mu, remaining);
         }
         if (ctx->closed && !ctx->firstAckArrived)
         {
-            natsMutex_Unlock(ctx->mu);
+            orbitMutex_Unlock(ctx->mu);
             return NATS_ERR;
         }
     }
@@ -567,7 +586,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
             if (now >= deadline)
             {
                 ctx->closed = true;
-                natsMutex_Unlock(ctx->mu);
+                orbitMutex_Unlock(ctx->mu);
                 return NATS_TIMEOUT;
             }
             if (now >= nextPing)
@@ -576,7 +595,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
                 if (s != NATS_OK)
                 {
                     ctx->closed = true;
-                    natsMutex_Unlock(ctx->mu);
+                    orbitMutex_Unlock(ctx->mu);
                     return s;
                 }
                 nextPing = now + pingInterval;
@@ -584,11 +603,11 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
             int64_t wake = (nextPing < deadline ? nextPing : deadline) - now;
             if (wake <= 0)
                 wake = 1;
-            natsCondition_TimedWait(ctx->cond, ctx->mu, wake);
+            orbitCondition_TimedWait(ctx->cond, ctx->mu, wake);
         }
         if (ctx->closed)
         {
-            natsMutex_Unlock(ctx->mu);
+            orbitMutex_Unlock(ctx->mu);
             return NATS_ERR;
         }
     }
@@ -599,7 +618,7 @@ _addPublish(jsFastPubAck *ackOut, jsFastPublishCtx *ctx,
         ackOut->AckSequence   = ctx->ackSequence;
     }
 
-    natsMutex_Unlock(ctx->mu);
+    orbitMutex_Unlock(ctx->mu);
     return NATS_OK;
 }
 
@@ -637,17 +656,17 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     if (timeoutMs <= 0)
         return NATS_INVALID_ARG;
 
-    natsMutex_Lock(ctx->mu);
+    orbitMutex_Lock(ctx->mu);
 
     if (ctx->closed)
     {
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
     if (ctx->ackSub == NULL)
     {
         // Nothing has been added: nothing to commit / close.
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
     nc = ctx->nc;
@@ -665,7 +684,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
         // context is closed on any return, so close here too rather than
         // leaving the batch open as the Add path does.
         ctx->closed = true;
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return s;
     }
 
@@ -678,7 +697,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     if (s != NATS_OK)
     {
         ctx->closed = true;
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return s;
     }
 
@@ -698,7 +717,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
         if (now >= deadline)
         {
             ctx->closed = true;
-            natsMutex_Unlock(ctx->mu);
+            orbitMutex_Unlock(ctx->mu);
             return NATS_TIMEOUT;
         }
         if (now >= nextPing)
@@ -708,7 +727,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
             if (s != NATS_OK)
             {
                 ctx->closed = true;
-                natsMutex_Unlock(ctx->mu);
+                orbitMutex_Unlock(ctx->mu);
                 return s;
             }
             nextPing = now + pingInterval;
@@ -716,7 +735,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
         int64_t wake = (nextPing < deadline ? nextPing : deadline) - now;
         if (wake <= 0)
             wake = 1;
-        natsCondition_TimedWait(ctx->cond, ctx->mu, wake);
+        orbitCondition_TimedWait(ctx->cond, ctx->mu, wake);
     }
 
     // The batch can be closed out from under an in-flight commit without a
@@ -724,7 +743,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     // inbox. Fail promptly rather than blocking until the deadline.
     if (!ctx->commitArrived)
     {
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
 
@@ -732,7 +751,7 @@ _commit(jsPubAck **outAck, jsFastPublishCtx *ctx, const char *subject,
     ctx->commitAck        = NULL;
     natsStatus  commitErr = ctx->commitErr;
     ctx->closed           = true;
-    natsMutex_Unlock(ctx->mu);
+    orbitMutex_Unlock(ctx->mu);
 
     if (commitErr != NATS_OK)
     {
@@ -774,13 +793,13 @@ jsFastPublish_Close(jsPubAck **pubAck, jsFastPublishCtx *ctx, int64_t timeout)
     if (ctx == NULL)
         return NATS_INVALID_ARG;
 
-    natsMutex_Lock(ctx->mu);
+    orbitMutex_Lock(ctx->mu);
     if (ctx->closed || ctx->sequence == 0 || ctx->batchSubject == NULL)
     {
-        natsMutex_Unlock(ctx->mu);
+        orbitMutex_Unlock(ctx->mu);
         return NATS_ERR;
     }
-    natsMutex_Unlock(ctx->mu);
+    orbitMutex_Unlock(ctx->mu);
 
     return _commit(pubAck, ctx, NULL, NULL, 0, NULL, NULL, timeout, true);
 }
@@ -790,9 +809,9 @@ jsFastPublish_IsClosed(jsFastPublishCtx *ctx)
 {
     if (ctx == NULL)
         return true;
-    natsMutex_Lock(ctx->mu);
+    orbitMutex_Lock(ctx->mu);
     bool closed = ctx->closed;
-    natsMutex_Unlock(ctx->mu);
+    orbitMutex_Unlock(ctx->mu);
     return closed;
 }
 
@@ -813,8 +832,8 @@ jsFastPublish_Destroy(jsFastPublishCtx *ctx)
     free(ctx->replyPrefix);
     free(ctx->batchSubject);
     if (ctx->cond != NULL)
-        natsCondition_Destroy(ctx->cond);
+        orbitCondition_Destroy(ctx->cond);
     if (ctx->mu != NULL)
-        natsMutex_Destroy(ctx->mu);
+        orbitMutex_Destroy(ctx->mu);
     free(ctx);
 }

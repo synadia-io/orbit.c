@@ -70,14 +70,14 @@ typedef struct __natsSocksProxy
 // be freed. Proxy definitions are therefore interned here, one entry per
 // distinct URL, and live as long as the process — bounded by the number of
 // distinct proxies connected through, not by the number of connections.
-static natsSysOnce     _socksOnce = NATS_SYS_ONCE_INIT;
-static natsMutex      *_socksMutex = NULL;
+static natsSysOnce    _socksOnce   = NATS_SYS_ONCE_INIT;
+static orbitMutex     *_socksMutex  = NULL;
 static natsSocksProxy *_socksProxies = NULL;
 
 static void
 _initSocks(void)
 {
-    if (natsMutex_Create(&_socksMutex) != NATS_OK)
+    if (orbitMutex_Create(&_socksMutex) != NATS_OK)
         _socksMutex = NULL;
 }
 
@@ -553,7 +553,7 @@ natsSocks_ProxyHandler(const char *url, natsProxyConnHandler *handler, void **cl
     if (_socksMutex == NULL)
         return NATS_NO_MEMORY;
 
-    natsMutex_Lock(_socksMutex);
+    orbitMutex_Lock(_socksMutex);
 
     for (proxy = _socksProxies; proxy != NULL; proxy = proxy->next)
     {
@@ -571,7 +571,7 @@ natsSocks_ProxyHandler(const char *url, natsProxyConnHandler *handler, void **cl
         }
     }
 
-    natsMutex_Unlock(_socksMutex);
+    orbitMutex_Unlock(_socksMutex);
 
     if (s != NATS_OK)
         return s;

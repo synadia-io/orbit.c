@@ -14,11 +14,11 @@
 #include "../os_shims.h"
 
 natsStatus
-natsMutex_Create(natsMutex **newMutex)
+orbitMutex_Create(orbitMutex **newMutex)
 {
     natsStatus          s = NATS_OK;
     pthread_mutexattr_t attr;
-    natsMutex           *m = calloc(1, sizeof(natsMutex));
+    orbitMutex           *m = calloc(1, sizeof(orbitMutex));
 
     if (m == NULL)
         return NATS_NO_MEMORY;
@@ -52,7 +52,7 @@ natsMutex_Create(natsMutex **newMutex)
 }
 
 bool
-natsMutex_TryLock(natsMutex *m)
+orbitMutex_TryLock(orbitMutex *m)
 {
     if (pthread_mutex_trylock(m) == 0)
         return true;
@@ -61,7 +61,7 @@ natsMutex_TryLock(natsMutex *m)
 }
 
 void
-natsMutex_Lock(natsMutex *m)
+orbitMutex_Lock(orbitMutex *m)
 {
     if (pthread_mutex_lock(m))
         abort();
@@ -69,14 +69,14 @@ natsMutex_Lock(natsMutex *m)
 
 
 void
-natsMutex_Unlock(natsMutex *m)
+orbitMutex_Unlock(orbitMutex *m)
 {
     if (pthread_mutex_unlock(m))
         abort();
 }
 
 void
-natsMutex_Destroy(natsMutex *m)
+orbitMutex_Destroy(orbitMutex *m)
 {
     if (m == NULL)
         return;

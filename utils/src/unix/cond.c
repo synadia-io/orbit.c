@@ -14,9 +14,9 @@
 #include "../os_shims.h"
 
 natsStatus
-natsCondition_Create(natsCondition **cond)
+orbitCondition_Create(orbitCondition **cond)
 {
-    natsCondition   *c = (natsCondition*) calloc(1, sizeof(natsCondition));
+    orbitCondition   *c = (orbitCondition*) calloc(1, sizeof(orbitCondition));
     natsStatus      s  = NATS_OK;
 
     if (c == NULL)
@@ -34,14 +34,14 @@ natsCondition_Create(natsCondition **cond)
 }
 
 void
-natsCondition_Wait(natsCondition *cond, natsMutex *mutex)
+orbitCondition_Wait(orbitCondition *cond, orbitMutex *mutex)
 {
     if (pthread_cond_wait(cond, mutex) != 0)
         abort();
 }
 
 static natsStatus
-_timedWait(natsCondition *cond, natsMutex *mutex, bool isAbsolute, int64_t timeout)
+_timedWait(orbitCondition *cond, orbitMutex *mutex, bool isAbsolute, int64_t timeout)
 {
     int     r;
     struct  timespec ts;
@@ -76,33 +76,33 @@ _timedWait(natsCondition *cond, natsMutex *mutex, bool isAbsolute, int64_t timeo
 }
 
 natsStatus
-natsCondition_TimedWait(natsCondition *cond, natsMutex *mutex, int64_t timeout)
+orbitCondition_TimedWait(orbitCondition *cond, orbitMutex *mutex, int64_t timeout)
 {
     return _timedWait(cond, mutex, false, timeout);
 }
 
 natsStatus
-natsCondition_AbsoluteTimedWait(natsCondition *cond, natsMutex *mutex, int64_t absoluteTime)
+orbitCondition_AbsoluteTimedWait(orbitCondition *cond, orbitMutex *mutex, int64_t absoluteTime)
 {
     return _timedWait(cond, mutex, true, absoluteTime);
 }
 
 void
-natsCondition_Signal(natsCondition *cond)
+orbitCondition_Signal(orbitCondition *cond)
 {
     if (pthread_cond_signal(cond) != 0)
       abort();
 }
 
 void
-natsCondition_Broadcast(natsCondition *cond)
+orbitCondition_Broadcast(orbitCondition *cond)
 {
     if (pthread_cond_broadcast(cond) != 0)
       abort();
 }
 
 void
-natsCondition_Destroy(natsCondition *cond)
+orbitCondition_Destroy(orbitCondition *cond)
 {
     if (cond == NULL)
         return;

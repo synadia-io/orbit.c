@@ -73,7 +73,8 @@ Examples are named `<module>-<example>`, e.g. `build/bin/nats-counters-basic_cou
 ## Install
 
 ```sh
-cmake --install build --prefix /usr/local
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build --target install
 ```
 
 Headers are installed flat under `include/`, except `nats_sysclient`'s, which go under `include/nats-sysclient/` because of their generic names (`varz.h`, `connz.h`, ...).
@@ -94,7 +95,8 @@ cmake --build build-asan
 The test suites spawn their own `nats-server` for each test, so no server needs to be running — the `nats-server` binary just needs to be on `PATH`. Set `NATS_TEST_SERVER_EXE` to point at a different binary if needed, or `NATS_TEST_KEEP_SERVER_OUTPUT=1` to keep the per-test server log.
 
 ```sh
-ctest --test-dir build --output-on-failure
+cd build
+ctest --output-on-failure
 ```
 
 Each module's tests carry a prefix, so a single module can be run with `-R`:
@@ -105,9 +107,12 @@ Each module's tests carry a prefix, so a single module can be run with `-R`:
 | jetstream extra | `jsx_` |
 | kv codec | `kvc_` |
 | nats sysclient | `sys_` |
+| nats counters | `cnt_` |
+| nats context | `ctx_` |
 
 ```sh
-ctest --test-dir build -R '^kvc_'
+cd build
+ctest -R '^kvc_'
 ```
 
 To run under valgrind:

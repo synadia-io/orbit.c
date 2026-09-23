@@ -14,22 +14,25 @@
 // Test framework shared by the orbit.c sub-library suites.
 //
 // Each suite registers its tests in list_test.txt as _test(<Name>), includes
-// this header once from test.c, and hands main() over to testMain(). The
-// suite's test directory must be on the include path (orbit_add_testsuite
-// takes care of that).
+// this header once from test.c, and hands main() over to testMain().
+// ORBIT_TEST_LIST must name the suite's list file (orbit_add_testsuite takes
+// care of that).
 
 #ifndef ORBIT_TEST_H_
 #define ORBIT_TEST_H_
 
 #include <nats/nats.h>
 
+#include <arpa/inet.h>
 #include <dirent.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -45,12 +48,12 @@ typedef struct
 } testInfo;
 
 #define _test(name) void test_##name(void);
-#include "list_test.txt"
+#include ORBIT_TEST_LIST
 #undef _test
 
 static testInfo allTests[] = {
 #define _test(name) { #name, test_##name },
-#include "list_test.txt"
+#include ORBIT_TEST_LIST
 #undef _test
 };
 
@@ -178,11 +181,45 @@ _waitForServer(const char *url, int64_t budgetMs)
     return s;
 }
 
-// Starts "nats-server <cmdLineOpts> -a 127.0.0.1 [-l server.log]".
+// Reports whether something already listens on 127.0.0.1 at the port of 'url'.
+static bool
+_portInUse(const char *url)
+{
+    const char        *colon = strrchr(url, ':');
+    struct sockaddr_in addr;
+    bool               inUse;
+    int                fd;
+
+    if (colon == NULL)
+        return false;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons((uint16_t)atoi(colon + 1));
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return false;
+    inUse = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    close(fd);
+    return inUse;
+}
+
+// Starts "nats-server <cmdLineOpts> -a 127.0.0.1 [-l server.log]". Fails when
+// a stray server already holds the port of 'url', so tests never run against it.
 static natsPid
 _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
 {
-    natsPid pid = fork();
+    natsPid pid;
+
+    if ((url != NULL) && _portInUse(url))
+    {
+        printf("@@ A server is already listening at %s @@\n", url);
+        return NATS_INVALID_PID;
+    }
+
+    pid = fork();
     if (pid == -1)
         return NATS_INVALID_PID;
 
@@ -217,21 +254,10 @@ _startServer(const char *url, const char *cmdLineOpts, bool checkStart)
         _exit(1);
     }
 
-    if (checkStart)
+    if (checkStart && (_waitForServer(url, 2000) != NATS_OK))
     {
-        int status = 0;
-
-        if (_waitForServer(url, 2000) != NATS_OK)
-        {
-            _stopServer(pid);
-            return NATS_INVALID_PID;
-        }
-
-        // Connecting proves *a* server is listening. If a stray one held the
-        // port, our child died on bind; give it a moment to have done so.
-        usleep(SERVER_POLL_MS * 1000);
-        if (waitpid(pid, &status, WNOHANG) == pid)
-            return NATS_INVALID_PID;
+        _stopServer(pid);
+        return NATS_INVALID_PID;
     }
 
     _rememberServer(pid);
@@ -360,14 +386,20 @@ _rmtree(const char *path)
 
 #define MAX_TMP_PATHS (64)
 
-static char g_tmpPaths[MAX_TMP_PATHS][128];
+static char g_tmpPaths[MAX_TMP_PATHS][256];
 static int  g_tmpPathCount = 0;
 
+// A path that does not fit is not remembered: removing a truncated one could
+// delete an unrelated file or directory.
 static void
 _rememberPath(const char *path)
 {
-    if (g_tmpPathCount < MAX_TMP_PATHS)
-        snprintf(g_tmpPaths[g_tmpPathCount++], sizeof(g_tmpPaths[0]), "%s", path);
+    if ((g_tmpPathCount >= MAX_TMP_PATHS) || (strlen(path) >= sizeof(g_tmpPaths[0])))
+    {
+        printf("@@ Not removing '%s' at exit @@\n", path);
+        return;
+    }
+    snprintf(g_tmpPaths[g_tmpPathCount++], sizeof(g_tmpPaths[0]), "%s", path);
 }
 
 static void

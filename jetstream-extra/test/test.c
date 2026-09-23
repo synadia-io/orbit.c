@@ -389,7 +389,9 @@ void
 test_BatchFetchAsyncHappyPath(void)
 {
     jsBatchFetchOptions opts;
-    _asyncTestCtx ctx = { 0 };
+    // Static: a bail-out leaves the fetch pending, and testMain's connection
+    // release then runs _asyncDone after this frame has returned.
+    static _asyncTestCtx ctx;
     int i;
     int nMsgs = 25;
     int waitedMs = 0;

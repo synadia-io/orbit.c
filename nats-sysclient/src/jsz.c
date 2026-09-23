@@ -279,7 +279,7 @@ _paged(const void *optsv)
 {
     const natsSysJszOptions *opts = (const natsSysJszOptions *) optsv;
 
-    return (opts != NULL) && opts->Accounts && nats_IsStringEmpty(opts->Account);
+    return opts->Accounts && nats_IsStringEmpty(opts->Account);
 }
 
 static const sysWalkOps _walkOps = {

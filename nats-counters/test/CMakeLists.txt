@@ -1,1 +1,1 @@
-orbit_add_testsuite(testsuite nats_counters)
+orbit_add_testsuite(nats_counters_testsuite nats_counters PREFIX cnt_)

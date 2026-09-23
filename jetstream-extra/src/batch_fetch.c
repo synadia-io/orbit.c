@@ -188,6 +188,7 @@ typedef enum
     KIND_ERR_404,    ///< No matching messages.
     KIND_ERR_408,    ///< Bad request.
     KIND_ERR_413,    ///< Payload-too-large / too many subjects.
+    KIND_ERR_503,    ///< No responders (stream missing or direct get disabled).
     KIND_UNSUPPORTED ///< Server lacks batch DIRECT.GET (no Nats-Num-Pending).
 
 } _msgKind;
@@ -201,20 +202,15 @@ _hdr(natsMsg *msg, const char *key)
     return v;
 }
 
-// Classifies the next reply; '*firstChecked' tracks whether the first one has
-// been seen.
 static _msgKind
-_classify(natsMsg *msg, bool *firstChecked)
+_classify(natsMsg *msg, bool firstMessageCheck)
 {
-    bool firstMessageCheck = !*firstChecked;
     int dataLen = natsMsg_GetDataLength(msg);
     const char *status;
     const char *desc;
     const char *seq;
     const char *numPending;
     const char *upToSeq;
-
-    *firstChecked = true;
 
     if (dataLen == 0)
     {
@@ -229,6 +225,8 @@ _classify(natsMsg *msg, bool *firstChecked)
                 return KIND_ERR_408;
             if (strcmp(status, "413") == 0)
                 return KIND_ERR_413;
+            if (strcmp(status, "503") == 0)
+                return KIND_ERR_503;
             if (strcmp(status, "204") == 0 && desc != NULL && strcmp(desc, "EOB") == 0)
                 return KIND_TERM_OK;
         }
@@ -267,6 +265,8 @@ _kindToStatus(_msgKind k, jsErrCode *errCodeOut)
             return NATS_ERR;
         case KIND_ERR_413:
             return NATS_ERR;
+        case KIND_ERR_503:
+            return NATS_NO_RESPONDERS;
         case KIND_UNSUPPORTED:
             return NATS_NO_SERVER_SUPPORT;
         case KIND_DATA:
@@ -345,7 +345,8 @@ _syncSentinel(natsMsg *msg, void *closure)
 {
     _syncCtx *ctx = (_syncCtx *)closure;
 
-    ctx->kind = _classify(msg, &ctx->firstChecked);
+    ctx->kind = _classify(msg, !ctx->firstChecked);
+    ctx->firstChecked = true;
     return ctx->kind != KIND_DATA;
 }
 
@@ -395,6 +396,7 @@ typedef struct
     jsErrCode                   finalErr;
     bool                        done;
     bool                        firstChecked;
+    bool                        setupFailed;
 
 } _asyncCtx;
 
@@ -411,7 +413,8 @@ _asyncOnMsg(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closu
         return;
     }
 
-    kind = _classify(msg, &ctx->firstChecked);
+    kind = _classify(msg, !ctx->firstChecked);
+    ctx->firstChecked = true;
 
     if (kind == KIND_DATA)
     {
@@ -434,6 +437,14 @@ static void
 _asyncOnComplete(void *closure)
 {
     _asyncCtx *ctx = (_asyncCtx *)closure;
+
+    // The request was never sent and the caller already has the error.
+    if (ctx->setupFailed)
+    {
+        natsSubscription_Destroy(ctx->sub);
+        free(ctx);
+        return;
+    }
 
     // doneCB may not have been set if Unsubscribe never fired (e.g. the
     // subscription was closed by connection shutdown). In that case we
@@ -492,6 +503,8 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
                                       stp.body->data, stp.body->len);
     if (s != NATS_OK)
     {
+        // OnComplete owns ctx now; it must not call doneCB for a failed setup.
+        ctx->setupFailed = true;
         natsSubscription_Unsubscribe(sub);
     }
 

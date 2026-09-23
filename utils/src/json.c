@@ -239,9 +239,10 @@ _parseString(_jsonParser *ps, char **out)
                     p += 6;
                     cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                 }
-                else if ((cp >= 0xDC00) && (cp <= 0xDFFF))
+                else if (((cp >= 0xDC00) && (cp <= 0xDFFF)) || (cp == 0))
                 {
-                    // Unpaired low surrogate.
+                    // Unpaired low surrogate, or a NUL that would silently
+                    // truncate the C string.
                     NATS_FREE(buf);
                     return NATS_ERR;
                 }

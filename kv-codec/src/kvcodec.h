@@ -146,7 +146,7 @@ typedef natsStatus (*kvKeyTransformF)(char **out, const char *in, void *closure)
  *
  * @param out out-param: the transformed value; allocated with
  * #kvCodec_AllocBuf, released by the library.
- * @param outLen out-param: the length of `*out` in bytes.
+ * @param outLen out-param: the length of `*out` in bytes; must not be negative.
  * @param in the value to transform; may be `NULL` iff `inLen` is 0; borrowed.
  * @param inLen the length of `in` in bytes.
  * @param closure the opaque pointer given to #kvValueCodec_New.
