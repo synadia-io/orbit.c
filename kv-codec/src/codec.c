@@ -195,6 +195,21 @@ kvcodec_encodeFilter(char **out, kvKeyCodec *kc, const char *filter)
     return kc->encodeKey(out, filter, kc->closure);
 }
 
+// Rejects a custom transform's result whose length is negative, or that has
+// no buffer for a non-zero length.
+static natsStatus
+_checkTransform(natsStatus s, void **out, int *outLen)
+{
+    if ((s == NATS_OK) && ((*outLen < 0) || ((*out == NULL) && (*outLen > 0))))
+    {
+        NATS_FREE(*out);
+        *out    = NULL;
+        *outLen = 0;
+        s       = NATS_ERR;
+    }
+    return s;
+}
+
 natsStatus
 kvcodec_encodeValue(void **out, int *outLen, kvValueCodec *vc, const void *value, int len)
 {
@@ -202,7 +217,7 @@ kvcodec_encodeValue(void **out, int *outLen, kvValueCodec *vc, const void *value
         return NATS_INVALID_ARG;
     if (vc == NULL)
         return _bufCopy(out, outLen, value, len);
-    return vc->encodeValue(out, outLen, value, len, vc->closure);
+    return _checkTransform(vc->encodeValue(out, outLen, value, len, vc->closure), out, outLen);
 }
 
 natsStatus
@@ -212,5 +227,5 @@ kvcodec_decodeValue(void **out, int *outLen, kvValueCodec *vc, const void *value
         return NATS_INVALID_ARG;
     if (vc == NULL)
         return _bufCopy(out, outLen, value, len);
-    return vc->decodeValue(out, outLen, value, len, vc->closure);
+    return _checkTransform(vc->decodeValue(out, outLen, value, len, vc->closure), out, outLen);
 }

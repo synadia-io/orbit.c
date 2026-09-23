@@ -55,12 +55,12 @@ typedef enum
 typedef struct __natsJSON natsJSON;
 
 // Parses 'len' bytes of JSON text at 'data' into a tree rooted at *newJSON.
-// 'data' need not be NUL-terminated. The root may be any JSON value, not just
-// an object or array.
+// 'data' need not be NUL-terminated, and may be NULL when 'len' is 0. The root
+// may be any JSON value, not just an object or array.
 //
 // Returns NATS_INVALID_ARG for NULL arguments or negative length, NATS_ERR for
-// malformed input, NATS_NO_MEMORY on allocation failure. On any error *newJSON
-// is set to NULL.
+// malformed (including empty) input, NATS_NO_MEMORY on allocation failure. On
+// any error *newJSON is set to NULL.
 natsStatus
 natsJSON_Parse(natsJSON **newJSON, const char *data, int len);
 
@@ -141,6 +141,10 @@ natsJSON_Lookup(const natsJSON *json, const char *key, natsJSON **out);
 // On success *out is a heap copy of the string; the caller frees it.
 natsStatus
 natsJSON_GetStr(const natsJSON *json, const char *key, char **out);
+
+// As natsJSON_GetStr, but *out borrows the string from the tree.
+natsStatus
+natsJSON_GetStrRef(const natsJSON *json, const char *key, const char **out);
 
 // As natsJSON_GetStr, but moves the string out of the tree instead of copying
 // it; the member is left as a JSON null.

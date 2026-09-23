@@ -19,356 +19,29 @@
 #include "sysclient.h"
 #include "varz.h"
 
-#include <nats/nats.h>
+#include "test.h"
 
-#include <dirent.h>
 #include <limits.h>
-#include <time.h>
-#include <signal.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
-// Test framework — mirrors the other orbit.c sub-library suites.
-
-typedef void (*testFunc)(void);
-
-typedef struct
-{
-    const char *name;
-    testFunc    func;
-} testInfo;
-
-#define _TEST_PROTO
-#include "list.h"
-#undef _TEST_PROTO
-
-#define _TEST_LIST
-static testInfo allTests[] = {
-#include "list.h"
-};
-#undef _TEST_LIST
-
-static int  tests  = 0;
-static bool failed = false;
-
-static const char *natsServerExe    = "nats-server";
-static bool        keepServerOutput = false;
-
-#define NATS_INVALID_PID (-1)
-#define LOGFILE_NAME     "server.log"
-#define TEST_URL         "nats://127.0.0.1:4222"
-
-#define FAIL(m)                    \
-    {                              \
-        printf("@@ %s @@\n", (m)); \
-        failed = true;             \
-        return;                    \
-    }
-
-#define CHECK_SERVER_STARTED(p)  \
-    if ((p) == NATS_INVALID_PID) \
-    FAIL("Unable to start or verify that the server was started!")
-
-#define test(s)                    \
-    {                              \
-        printf("#%02d ", ++tests); \
-        printf("%s", (s));         \
-        fflush(stdout);            \
-    }
-#define testCond(c)                            \
-    if (c)                                     \
-    {                                          \
-        printf("\033[0;32mPASSED\033[0;0m\n"); \
-        fflush(stdout);                        \
-    }                                          \
-    else                                       \
-    {                                          \
-        printf("\033[0;31mFAILED\033[0;0m\n"); \
-        fflush(stdout);                        \
-        failed = true;                         \
-        return;                                \
-    }
-
-// Server lifecycle. A set of pids rather than one: the cluster tests start
-// three servers, and a testCond bail-out must not leave them running.
-
-typedef pid_t natsPid;
-
-#define MAX_SERVERS (8)
-
-static natsPid g_serverPids[MAX_SERVERS];
-static int     g_serverCount = 0;
+#define CLUSTER_POLL_MS (50)
 
 static void
-_forgetServer(natsPid pid)
+_clientDestroyer(void *h)
 {
-    int i;
-
-    for (i = 0; i < g_serverCount; i++)
-    {
-        if (g_serverPids[i] != pid)
-            continue;
-        g_serverPids[i] = g_serverPids[--g_serverCount];
-        return;
-    }
-}
-
-static void
-_stopServer(natsPid pid)
-{
-    int status = 0;
-
-    if (pid == NATS_INVALID_PID)
-        return;
-    if (kill(pid, SIGINT) < 0)
-    {
-        if (kill(pid, SIGKILL) < 0)
-            return;
-    }
-    waitpid(pid, &status, 0);
-    _forgetServer(pid);
-}
-
-static void
-_stopAllServers(void)
-{
-    while (g_serverCount > 0)
-        _stopServer(g_serverPids[0]);
-}
-
-// Connections and clients a test has open, released by main() when a
-// testCond bail-out skips the test's own teardown.
-
-#define MAX_HANDLES (16)
-
-static natsConnection *g_conns[MAX_HANDLES];
-static int             g_connCount = 0;
-static natsSysClient  *g_clients[MAX_HANDLES];
-static int             g_clientCount = 0;
-
-static void
-_rememberConn(natsConnection *nc)
-{
-    if ((nc != NULL) && (g_connCount < MAX_HANDLES))
-        g_conns[g_connCount++] = nc;
+    natsSysClient_Destroy((natsSysClient *) h);
 }
 
 static void
 _rememberClient(natsSysClient *sys)
 {
-    if ((sys != NULL) && (g_clientCount < MAX_HANDLES))
-        g_clients[g_clientCount++] = sys;
-}
-
-// Destroys a connection and drops it from the registry; NULL is a no-op.
-static void
-_destroyConn(natsConnection *nc)
-{
-    int i;
-
-    for (i = 0; i < g_connCount; i++)
-    {
-        if (g_conns[i] == nc)
-        {
-            g_conns[i] = g_conns[--g_connCount];
-            break;
-        }
-    }
-    natsConnection_Destroy(nc);
+    _track(sys, _clientDestroyer);
 }
 
 static void
 _destroyClient(natsSysClient *sys)
 {
-    int i;
-
-    for (i = 0; i < g_clientCount; i++)
-    {
-        if (g_clients[i] == sys)
-        {
-            g_clients[i] = g_clients[--g_clientCount];
-            break;
-        }
-    }
+    _untrack(sys);
     natsSysClient_Destroy(sys);
-}
-
-// Clients first: they borrow their connection.
-static void
-_destroyRememberedHandles(void)
-{
-    while (g_clientCount > 0)
-        _destroyClient(g_clients[0]);
-    while (g_connCount > 0)
-        _destroyConn(g_conns[0]);
-}
-
-static int64_t
-_nowMs(void)
-{
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ((int64_t) ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
-}
-
-// Waits are deadlines with a poll interval, not attempt counts.
-#define SERVER_POLL_MS  (10)
-#define CLUSTER_POLL_MS (50)
-
-// Waits up to 'budgetMs' for a server to accept connections.
-static natsStatus
-_waitForServer(const char *url, int64_t budgetMs)
-{
-    natsConnection *nc       = NULL;
-    natsStatus      s        = NATS_OK;
-    int64_t         deadline = _nowMs() + budgetMs;
-
-    while (((s = natsConnection_ConnectTo(&nc, url)) != NATS_OK) && (_nowMs() < deadline))
-    {
-        usleep(SERVER_POLL_MS * 1000);
-    }
-
-    if (nc != NULL)
-        natsConnection_Destroy(nc);
-    return s;
-}
-
-static natsPid
-_startServer(const char *url, const char *cmdLineOpts, bool checkStart)
-{
-    natsPid pid = fork();
-    if (pid == -1)
-        return NATS_INVALID_PID;
-
-    if (pid == 0)
-    {
-        char  combined[2048];
-        char *argvPtrs[64];
-        int   index = 0;
-        char *p;
-
-        snprintf(combined, sizeof(combined), "%s%s%s -a 127.0.0.1%s",
-                 natsServerExe,
-                 (cmdLineOpts != NULL ? " " : ""),
-                 (cmdLineOpts != NULL ? cmdLineOpts : ""),
-                 (keepServerOutput ? "" : " -l " LOGFILE_NAME));
-
-        p = combined;
-        while (*p != '\0')
-        {
-            while ((*p == ' ') || (*p == '\t'))
-                *p++ = '\0';
-            if (*p == '\0')
-                break;
-            argvPtrs[index++] = p;
-            while ((*p != '\0') && (*p != ' ') && (*p != '\t'))
-                p++;
-        }
-        argvPtrs[index] = NULL;
-
-        execvp(argvPtrs[0], argvPtrs);
-        perror("exec failed");
-        _exit(1);
-    }
-
-    if (checkStart)
-    {
-        int status = 0;
-
-        if (_waitForServer(url, 2000) != NATS_OK)
-        {
-            _stopServer(pid);
-            return NATS_INVALID_PID;
-        }
-
-        // Connecting proves *a* server is listening. If a stray one held the
-        // port, our child died on bind; give it a moment to have done so.
-        usleep(SERVER_POLL_MS * 1000);
-        if (waitpid(pid, &status, WNOHANG) == pid)
-        {
-            _forgetServer(pid);
-            return NATS_INVALID_PID;
-        }
-    }
-
-    if (g_serverCount < MAX_SERVERS)
-        g_serverPids[g_serverCount++] = pid;
-    return pid;
-}
-
-// Filesystem helpers — same shape as the jetstream-extra suite, which also
-// hands the server a per-run store directory and removes it afterwards.
-
-static void
-_rmtree(const char *path)
-{
-    DIR           *dir;
-    struct stat    st;
-    struct dirent *entry;
-
-    if (stat(path, &st) != 0)
-        return;
-    if (!S_ISDIR(st.st_mode))
-    {
-        unlink(path);
-        return;
-    }
-
-    dir = opendir(path);
-    if (dir == NULL)
-        return;
-
-    while ((entry = readdir(dir)) != NULL)
-    {
-        char fullPath[1024];
-
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-            continue;
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, entry->d_name);
-        _rmtree(fullPath);
-    }
-
-    closedir(dir);
-    rmdir(path);
-}
-
-static int _uniqueCounter = 0;
-
-// Config files and store directories, removed by main() however the test
-// ended.
-#define MAX_TMP_PATHS (64)
-
-static char g_tmpPaths[MAX_TMP_PATHS][128];
-static int  g_tmpPathCount = 0;
-
-static void
-_rememberPath(const char *path)
-{
-    if (g_tmpPathCount < MAX_TMP_PATHS)
-        snprintf(g_tmpPaths[g_tmpPathCount++], sizeof(g_tmpPaths[0]), "%s", path);
-}
-
-// _rmtree removes a plain file too, so this covers both configs and stores.
-static void
-_removeRememberedPaths(void)
-{
-    while (g_tmpPathCount > 0)
-        _rmtree(g_tmpPaths[--g_tmpPathCount]);
-}
-
-static void
-_makeUniqueDir(char *buf, int bufLen, const char *prefix)
-{
-    snprintf(buf, bufLen, "%s%d_%d", prefix, (int) getpid(), ++_uniqueCounter);
-    _rememberPath(buf);
 }
 
 // A stand-in for nats-server's HEALTHZ endpoint, giving byte-exact control
@@ -407,31 +80,19 @@ _healthzResponder(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void 
     "\"error\":\"boom\"}]}}"
 
 // SETUP starts a server, connects, and creates a client with default options.
-#define SETUP                                                    \
-    natsStatus      s   = NATS_OK;                               \
-    natsConnection *nc  = NULL;                                  \
-    natsSysClient  *sys = NULL;                                  \
-    natsPid         pid = NATS_INVALID_PID;                      \
-                                                                 \
-    test("Start server: ");                                      \
-    pid = _startServer(TEST_URL, NULL, true);                    \
-    CHECK_SERVER_STARTED(pid);                                   \
-    testCond(true);                                              \
-                                                                 \
-    test("Connect: ");                                           \
-    s = natsConnection_ConnectTo(&nc, TEST_URL);                 \
-    _rememberConn(nc);                                           \
-    testCond(s == NATS_OK);                                      \
-                                                                 \
-    test("Create client: ");                                     \
-    s = natsSysClient_Create(&sys, nc, NULL);                    \
-    _rememberClient(sys);                                        \
+#define SETUP                                 \
+    natsSysClient *sys = NULL;                \
+                                              \
+    CORE_SETUP;                               \
+                                              \
+    test("Create client: ");                  \
+    s = natsSysClient_Create(&sys, nc, NULL); \
+    _rememberClient(sys);                     \
     testCond(s == NATS_OK)
 
 #define TEARDOWN         \
     _destroyClient(sys); \
-    _destroyConn(nc);    \
-    _stopServer(pid)
+    CORE_TEARDOWN
 
 void
 test_ClientCreateArgs(void)
@@ -3022,25 +2683,16 @@ test_JszPingEach(void)
 
 // The system-account counterpart to SETUP: writes 'conf' to 'file', starts a
 // server on it with 'args', connects on the system account and creates a
-// client. Declares s/nc/sys/pid, exactly as SETUP does.
+// client. Declares s/nc/sys/pid, exactly as SETUP does; pair with TEARDOWN.
 #define SETUP_SYS(conf, file, args)                        \
     natsStatus      s   = NATS_OK;                         \
     natsConnection *nc  = NULL;                            \
     natsSysClient  *sys = NULL;                            \
     natsPid         pid = NATS_INVALID_PID;                \
                                                            \
-    {                                                      \
-        FILE *_f;                                          \
-                                                           \
-        test("Write the server config: ");                 \
-        _f = fopen((file), "w");                           \
-        if (_f == NULL)                                    \
-            FAIL("unable to write the server config");     \
-        fputs((conf), _f);                                 \
-        fclose(_f);                                        \
-        _rememberPath(file);                               \
-        testCond(true);                                    \
-    }                                                      \
+    test("Write the server config: ");                     \
+    _rememberPath(file);                                   \
+    testCond(_writeFile((file), (conf)));                  \
                                                            \
     test("Start the server: ");                            \
     pid = _startServer(SYS_URL, (args), true);             \
@@ -3048,20 +2700,13 @@ test_JszPingEach(void)
     testCond(true);                                        \
                                                            \
     test("Connect on the system account: ");               \
-    s = natsConnection_ConnectTo(&nc, SYS_URL);            \
-    _rememberConn(nc);                                     \
+    s = _connect(&nc, SYS_URL);                       \
     testCond(s == NATS_OK);                                \
                                                            \
     test("Create client: ");                               \
     s = natsSysClient_Create(&sys, nc, NULL);              \
     _rememberClient(sys);                                  \
     testCond(s == NATS_OK)
-
-#define TEARDOWN_SYS(file) \
-    _destroyClient(sys);   \
-    _destroyConn(nc);      \
-    _stopServer(pid);      \
-    remove(file)
 
 static const char *SYS_CONF =
     "port: 4222\n"
@@ -3119,7 +2764,7 @@ test_HealthzRealServer(void)
 
     natsSysHealthzResp_Destroy(resp);
     natsSysHealthzRespList_Destroy(&list);
-    TEARDOWN_SYS(SYS_CONF_FILE);
+    TEARDOWN;
 }
 
 // Decoding a payload the real server actually produced, rather than one this
@@ -3184,7 +2829,7 @@ test_VarzStatszRealServer(void)
     natsSysVarzResp_Destroy(varz);
     natsSysStatszRespList_Destroy(&statszes);
     natsSysVarzRespList_Destroy(&varzes);
-    TEARDOWN_SYS(SYS_CONF_FILE);
+    TEARDOWN;
 }
 
 // Pagination against the server's own paging, rather than a stand-in that
@@ -3211,7 +2856,7 @@ test_ConnzSubszRealServer(void)
 
     test("Open a dozen more connections and a subscription: ");
     for (i = 0; (i < REAL_CONNS) && (s == NATS_OK); i++)
-        s = natsConnection_ConnectTo(&extras[i], SYS_URL);
+        s = _connect(&extras[i], SYS_URL);
     if (s == NATS_OK)
         s = natsConnection_SubscribeSync(&sub, nc, "foo.bar");
     if (s == NATS_OK)
@@ -3267,8 +2912,8 @@ test_ConnzSubszRealServer(void)
     natsSysSubszResp_Destroy(subsz);
     natsSubscription_Destroy(sub);
     for (i = 0; i < REAL_CONNS; i++)
-        natsConnection_Destroy(extras[i]);
-    TEARDOWN_SYS(SYS_CONF_FILE);
+        _destroyConn(extras[i]);
+    TEARDOWN;
 }
 
 // JSZ against a real JetStream server, so the account pagination runs against
@@ -3289,45 +2934,21 @@ static const char *JS_CONF =
 void
 test_JszRealServer(void)
 {
-    natsStatus        s;
-    natsConnection   *nc        = NULL;
     natsConnection   *accts[3]  = {NULL, NULL, NULL};
-    natsSysClient    *sys       = NULL;
-    natsPid           pid       = NATS_INVALID_PID;
     natsSysJszResp   *jsz       = NULL;
     natsSysJszOptions opts;
     pageCounter       pc;
-    FILE             *f;
     char              cmdline[256];
     char              storeDir[128];
     char              serverID[128];
     int               accounts;
     int               i;
 
-    test("Write a JetStream config with three accounts: ");
-    f = fopen(JS_CONF_FILE, "w");
-    if (f == NULL)
-        FAIL("unable to write the server config");
-    _rememberPath(JS_CONF_FILE);
-    fputs(JS_CONF, f);
-    fclose(f);
-    testCond(true);
-
-    test("Start the server: ");
-    // The store directory is supplied per run so repeated runs cannot collide,
-    // and removed at the end rather than left behind.
-    _makeUniqueDir(storeDir, (int) sizeof(storeDir), "datastore_jsz_");
+    // The store directory is supplied per run so repeated runs cannot collide.
+    _uniqueTmpPath(storeDir, (int) sizeof(storeDir), "datastore_jsz_");
     snprintf(cmdline, sizeof(cmdline), "-c %s -js -sd %s", JS_CONF_FILE, storeDir);
-    pid = _startServer(SYS_URL, cmdline, false);
-    if (pid == NATS_INVALID_PID)
-        FAIL("unable to start the server");
-    testCond(_waitForServer(SYS_URL, 2000) == NATS_OK);
 
-    test("Connect and create the client: ");
-    s = natsConnection_ConnectTo(&nc, SYS_URL);
-    if (s == NATS_OK)
-        s = natsSysClient_Create(&sys, nc, NULL);
-    testCond(s == NATS_OK);
+    SETUP_SYS(JS_CONF, JS_CONF_FILE, cmdline);
 
     test("Activate each JetStream account: ");
     // An account only shows up in JSZ once it has been used, so connect one
@@ -3340,7 +2961,7 @@ test_JszRealServer(void)
         jsErrCode   jerr = 0;
 
         snprintf(url, sizeof(url), "nats://u%d:p%d@127.0.0.1:4222", i + 1, i + 1);
-        s = natsConnection_ConnectTo(&accts[i], url);
+        s = _connect(&accts[i], url);
         if (s == NATS_OK)
             s = natsConnection_JetStream(&js, accts[i], NULL);
         if (s == NATS_OK)
@@ -3420,12 +3041,8 @@ test_JszRealServer(void)
 
     natsSysJszResp_Destroy(jsz);
     for (i = 0; i < 3; i++)
-        natsConnection_Destroy(accts[i]);
-    natsSysClient_Destroy(sys);
-    natsConnection_Destroy(nc);
-    _stopServer(pid);
-    _rmtree(storeDir);
-    remove(JS_CONF_FILE);
+        _destroyConn(accts[i]);
+    TEARDOWN;
 }
 
 //
@@ -3535,7 +3152,7 @@ _startCluster(cluster *c, bool jetstream)
     {
         snprintf(c->confs[i], sizeof(c->confs[i]), "conf_cluster%d.conf", i + 1);
         if (jetstream)
-            _makeUniqueDir(c->stores[i], (int) sizeof(c->stores[i]), "datastore_clu_");
+            _uniqueTmpPath(c->stores[i], (int) sizeof(c->stores[i]), "datastore_clu_");
         if (!_writeClusterConf(c, i))
             return NATS_ERR;
     }
@@ -3553,8 +3170,7 @@ _startCluster(cluster *c, bool jetstream)
     _clusterURL(url, sizeof(url), 0);
     s = _waitForServer(url, 5000);
     if (s == NATS_OK)
-        s = natsConnection_ConnectTo(&c->nc, url);
-    _rememberConn(c->nc);
+        s = _connect(&c->nc, url);
     if (s == NATS_OK)
         s = natsSysClient_Create(&c->sys, c->nc, NULL);
     _rememberClient(c->sys);
@@ -3581,10 +3197,6 @@ _stopCluster(cluster *c)
     for (i = 0; i < CLUSTER_SIZE; i++)
     {
         _stopServer(c->pids[i]);
-        if (c->confs[i][0] != '\0')
-            remove(c->confs[i]);
-        if (c->stores[i][0] != '\0')
-            _rmtree(c->stores[i]);
     }
 }
 
@@ -3930,7 +3542,7 @@ test_ClusterConnzPingEach(void)
 
         _clusterURL(url, sizeof(url), i);
         for (j = 0; (j < perNode[i]) && (s == NATS_OK); j++)
-            s = natsConnection_ConnectTo(&extras[nextra++], url);
+            s = _connect(&extras[nextra++], url);
     }
     testCond(s == NATS_OK);
 
@@ -4003,7 +3615,7 @@ test_ClusterConnzPingEach(void)
 
     natsSysConnzWalkList_Destroy(&walks);
     for (i = 0; i < nextra; i++)
-        natsConnection_Destroy(extras[i]);
+        _destroyConn(extras[i]);
     _stopCluster(&c);
 }
 
@@ -4047,7 +3659,7 @@ test_ClusterSubszPingEach(void)
         char url[128];
 
         _clusterURL(url, sizeof(url), i);
-        s = natsConnection_ConnectTo(&conns[i], url);
+        s = _connect(&conns[i], url);
         for (j = 0; (j < perNode[i]) && (s == NATS_OK); j++)
         {
             char subject[64];
@@ -4137,7 +3749,7 @@ test_ClusterSubszPingEach(void)
     for (i = 0; i < nsubs; i++)
         natsSubscription_Destroy(subs[i]);
     for (i = 0; i < CLUSTER_SIZE; i++)
-        natsConnection_Destroy(conns[i]);
+        _destroyConn(conns[i]);
     _stopCluster(&c);
 }
 
@@ -4177,7 +3789,7 @@ test_ClusterJszPingEach(void)
 
         snprintf(url, sizeof(url), "nats://u%d:p%d@127.0.0.1:%d", i + 1, i + 1,
                  CLU_CLIENT_PORT(0));
-        s = natsConnection_ConnectTo(&accts[i], url);
+        s = _connect(&accts[i], url);
         if (s == NATS_OK)
             s = natsConnection_JetStream(&js, accts[i], NULL);
         if (s == NATS_OK)
@@ -4229,66 +3841,12 @@ test_ClusterJszPingEach(void)
 
     natsSysJszWalkList_Destroy(&walks);
     for (i = 0; i < 3; i++)
-        natsConnection_Destroy(accts[i]);
+        _destroyConn(accts[i]);
     _stopCluster(&c);
 }
 
 int
 main(int argc, char **argv)
 {
-    const char *envStr;
-    const char *testName = NULL;
-    testFunc    f        = NULL;
-    int         i;
-
-    if (argc != 2)
-    {
-        printf("@@ Usage: %s [testname]\n", argv[0]);
-        return 1;
-    }
-    testName = argv[1];
-
-    envStr = getenv("NATS_TEST_SERVER_EXE");
-    if ((envStr != NULL) && (envStr[0] != '\0'))
-        natsServerExe = envStr;
-
-    envStr = getenv("NATS_TEST_KEEP_SERVER_OUTPUT");
-    if ((envStr != NULL) && (envStr[0] != '\0'))
-        keepServerOutput = true;
-
-    if (nats_Open(-1) != NATS_OK)
-    {
-        printf("@@ Unable to run tests: unable to initialize the library!\n");
-        return 1;
-    }
-
-    for (i = 0; i < (int) (sizeof(allTests) / sizeof(allTests[0])); i++)
-    {
-        if (strcmp(testName, allTests[i].name) != 0)
-            continue;
-        printf("\033[0;34m\n== %s ==\n\033[0;0m", allTests[i].name);
-        f = allTests[i].func;
-        f();
-        break;
-    }
-
-    if (f == NULL)
-    {
-        printf("@@ Test '%s' not found!\n", testName);
-        return 1;
-    }
-
-    _destroyRememberedHandles();
-    _stopAllServers();
-    _removeRememberedPaths();
-    remove(LOGFILE_NAME);
-    nats_CloseAndWait(failed ? 1 : 2000);
-
-    if (failed)
-    {
-        printf("*** TEST FAILED ***\n");
-        return 1;
-    }
-    printf("ALL PASSED\n");
-    return 0;
+    return testMain(argc, argv);
 }

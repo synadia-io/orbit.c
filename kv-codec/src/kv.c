@@ -54,23 +54,21 @@ kvcodec_wrapEntry(kvCodecEntry **newEntry, kvEntry *entry,
     void         *value    = NULL;
     int           valueLen = 0;
     bool          rawValue = false;
-    const void   *raw      = kvEntry_Value(entry);
 
     if (originalKey != NULL)
         s = kvcodec_decodeKey(&key, NULL, originalKey); // NULL codec = plain copy
     else
         s = kvcodec_decodeKey(&key, kc, kvEntry_Key(entry));
 
-    // Delete/purge markers carry no real value (cnats exposes their empty
-    // payload as a non-NULL, zero-length buffer): the value codec is never
+    // Delete/purge markers carry no real value: the value codec is never
     // invoked for them and the decoded value stays NULL. Zero-length Put
     // values also skip the codec (there is nothing to decode) and come back
-    // as an empty, non-NULL value.
-    if ((s == NATS_OK) && (raw != NULL) && (kvEntry_Operation(entry) == kvOp_Put))
+    // as an empty, non-NULL value whatever pointer cnats has for them.
+    if ((s == NATS_OK) && (kvEntry_Operation(entry) == kvOp_Put))
     {
         int rawLen = kvEntry_ValueLen(entry);
 
-        if (vc == NULL)
+        if ((vc == NULL) && (rawLen > 0))
         {
             // No value codec: the accessors read straight from the wrapped
             // kvEntry (owned by this entry) instead of copying the payload.
@@ -78,7 +76,8 @@ kvcodec_wrapEntry(kvCodecEntry **newEntry, kvEntry *entry,
         }
         else
         {
-            s = kvcodec_decodeValue(&value, &valueLen, (rawLen > 0 ? vc : NULL), raw, rawLen);
+            s = kvcodec_decodeValue(&value, &valueLen, (rawLen > 0 ? vc : NULL),
+                                    kvEntry_Value(entry), rawLen);
             if (s == NATS_OK)
             {
                 // Guarantee the hidden trailing NUL for ValueString: custom

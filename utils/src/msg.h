@@ -1,4 +1,4 @@
-// Copyright 2026 Synadia Communications Inc.
+// Copyright 2026 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,16 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifdef _TEST_PROTO
-#undef _test
-#define _test(name) void test_##name(void);
+#ifndef ORBIT_MSG_H_
+#define ORBIT_MSG_H_
+
+#include <nats/nats.h>
+
+#ifdef __cplusplus
+extern "C"
+{
 #endif
 
-#ifdef _TEST_LIST
-#undef _test
-#define _test(name) { #name, test_##name },
+// Adds every header value of 'src' to 'dst'. A 'src' without headers is not an
+// error.
+natsStatus
+natsMsg_CopyHeaders(natsMsg *dst, natsMsg *src);
+
+#ifdef __cplusplus
+}
 #endif
 
-#include "list_test.txt"
-
-#undef _test
+#endif /* ORBIT_MSG_H_ */

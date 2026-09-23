@@ -13,9 +13,8 @@
 
 // kv-codec test suite.
 //
-// Mirrors the framework used in jetstream-extra/test/test.c. The codec unit
-// tests run without a server; the KV* tests spawn a JetStream-enabled
-// nats-server (must be on PATH, or set NATS_TEST_SERVER_EXE).
+// The codec unit tests run without a server; the KV* tests spawn a
+// JetStream-enabled nats-server (must be on PATH, or set NATS_TEST_SERVER_EXE).
 //
 // Run a single test:
 //   ./kv_codec_testsuite Base64KeyRoundtrip
@@ -24,247 +23,26 @@
 
 #include "kvcodecp.h" // internal dispatch helpers, exercised directly
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
-#include <signal.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <dirent.h>
-
-// Test framework — same as jetstream-extra / nats-counters.
-
-typedef void (*testFunc)(void);
-
-typedef struct
-{
-    const char *name;
-    testFunc    func;
-} testInfo;
-
-#define _TEST_PROTO
-#include "list.h"
-#undef _TEST_PROTO
-
-#define _TEST_LIST
-static testInfo allTests[] = {
-#include "list.h"
-};
-#undef _TEST_LIST
-
-static int  tests  = 0;
-static bool failed = false;
-
-static const char *natsServerExe    = "nats-server";
-static bool        keepServerOutput = false;
-
-#define NATS_INVALID_PID (-1)
-#define LOGFILE_NAME     "server.log"
-
-#define FAIL(m)                    \
-    {                              \
-        printf("@@ %s @@\n", (m)); \
-        failed = true;             \
-        return;                    \
-    }
-
-#define CHECK_SERVER_STARTED(p)  \
-    if ((p) == NATS_INVALID_PID) \
-    FAIL("Unable to start or verify that the server was started!")
-
-#define test(s)                    \
-    {                              \
-        printf("#%02d ", ++tests); \
-        printf("%s", (s));         \
-        fflush(stdout);            \
-    }
-#define testCond(c)                            \
-    if (c)                                     \
-    {                                          \
-        printf("\033[0;32mPASSED\033[0;0m\n"); \
-        fflush(stdout);                        \
-    }                                          \
-    else                                       \
-    {                                          \
-        printf("\033[0;31mFAILED\033[0;0m\n"); \
-        fflush(stdout);                        \
-        failed = true;                         \
-        return;                                \
-    }
-
-// Server lifecycle
-
-typedef pid_t natsPid;
-
-static natsPid g_serverPid = NATS_INVALID_PID;
-
-static void
-_stopServer(natsPid pid)
-{
-    int status = 0;
-    if (pid == NATS_INVALID_PID)
-        return;
-    if (kill(pid, SIGINT) < 0)
-    {
-        if (kill(pid, SIGKILL) < 0)
-            return;
-    }
-    waitpid(pid, &status, 0);
-    if (pid == g_serverPid)
-        g_serverPid = NATS_INVALID_PID;
-}
-
-static natsStatus
-_checkStart(const char *url, int maxAttempts)
-{
-    natsConnection *nc       = NULL;
-    natsStatus      s        = NATS_OK;
-    int             attempts = 0;
-
-    while ((s = natsConnection_ConnectTo(&nc, url)) != NATS_OK && attempts++ < maxAttempts)
-    {
-        usleep(200 * 1000);
-    }
-
-    if (nc != NULL)
-        natsConnection_Destroy(nc);
-    return s;
-}
-
-static natsPid
-_startServer(const char *url, const char *cmdLineOpts, bool checkStart)
-{
-    natsPid pid = fork();
-    if (pid == -1)
-        return NATS_INVALID_PID;
-
-    if (pid == 0)
-    {
-        char  combined[2048];
-        char *argvPtrs[64];
-        int   index = 0;
-        char *p;
-
-        snprintf(combined, sizeof(combined), "%s%s%s -a 127.0.0.1%s",
-                 natsServerExe,
-                 (cmdLineOpts != NULL ? " " : ""),
-                 (cmdLineOpts != NULL ? cmdLineOpts : ""),
-                 (keepServerOutput ? "" : " -l " LOGFILE_NAME));
-
-        p = combined;
-        while (*p != '\0')
-        {
-            while (*p == ' ' || *p == '\t')
-                *p++ = '\0';
-            if (*p == '\0')
-                break;
-            argvPtrs[index++] = p;
-            while (*p != '\0' && *p != ' ' && *p != '\t')
-                p++;
-        }
-        argvPtrs[index] = NULL;
-
-        execvp(argvPtrs[0], argvPtrs);
-        perror("exec failed");
-        _exit(1);
-    }
-
-    if (checkStart)
-    {
-        if (_checkStart(url, 10) != NATS_OK)
-        {
-            _stopServer(pid);
-            return NATS_INVALID_PID;
-        }
-    }
-
-    g_serverPid = pid;
-    return pid;
-}
-
-static void
-_rmtree(const char *path)
-{
-    DIR           *dir;
-    struct stat    st;
-    struct dirent *entry;
-
-    if (stat(path, &st) != 0)
-        return;
-    if (!S_ISDIR(st.st_mode))
-    {
-        unlink(path);
-        return;
-    }
-
-    dir = opendir(path);
-    if (dir == NULL)
-        return;
-
-    while ((entry = readdir(dir)) != NULL)
-    {
-        char fullPath[1024];
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-            continue;
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, entry->d_name);
-        _rmtree(fullPath);
-    }
-
-    closedir(dir);
-    rmdir(path);
-}
-
-static int _uniqueCounter = 0;
-
-static void
-_makeUniqueDir(char *buf, int bufLen, const char *prefix)
-{
-    snprintf(buf, bufLen, "%s%d_%d", prefix, (int)getpid(), ++_uniqueCounter);
-}
+#include "test.h"
 
 // KV setup macros: JetStream-enabled server + a bucket with history.
 
-#define KV_SETUP                                                 \
-    natsStatus      s  = NATS_OK;                                \
-    natsConnection *nc = NULL;                                   \
-    jsCtx          *js = NULL;                                   \
-    kvStore        *kv = NULL;                                   \
-    kvConfig        kvc;                                         \
-    natsPid         pid            = NATS_INVALID_PID;           \
-    char            datastore[256] = { '\0' };                   \
-    char            cmdLine[1024]  = { '\0' };                   \
-                                                                 \
-    _makeUniqueDir(datastore, sizeof(datastore), "datastore_");  \
-    test("Start JS Server: ");                                   \
-    snprintf(cmdLine, sizeof(cmdLine), "-js -sd %s", datastore); \
-    pid = _startServer("nats://127.0.0.1:4222", cmdLine, true);  \
-    CHECK_SERVER_STARTED(pid);                                   \
-    testCond(true);                                              \
-                                                                 \
-    test("Connect: ");                                           \
-    s = natsConnection_ConnectTo(&nc, "nats://127.0.0.1:4222");  \
-    testCond(s == NATS_OK);                                      \
-                                                                 \
-    test("Get context: ");                                       \
-    s = natsConnection_JetStream(&js, nc, NULL);                 \
-    testCond(s == NATS_OK);                                      \
-                                                                 \
-    test("Create bucket: ");                                     \
-    kvConfig_Init(&kvc);                                         \
-    kvc.Bucket  = "TEST";                                        \
-    kvc.History = 5;                                             \
-    s           = js_CreateKeyValue(&kv, js, &kvc);              \
-    testCond(s == NATS_OK);
+#define KV_SETUP                                    \
+    kvStore *kv = NULL;                             \
+    kvConfig kvc;                                   \
+                                                    \
+    JS_SETUP;                                       \
+                                                    \
+    test("Create bucket: ");                        \
+    kvConfig_Init(&kvc);                            \
+    kvc.Bucket  = "TEST";                           \
+    kvc.History = 5;                                \
+    s           = js_CreateKeyValue(&kv, js, &kvc); \
+    testCond(s == NATS_OK)
 
-#define KV_TEARDOWN             \
-    kvStore_Destroy(kv);        \
-    jsCtx_Destroy(js);          \
-    natsConnection_Destroy(nc); \
-    _stopServer(pid);           \
-    _rmtree(datastore);
+#define KV_TEARDOWN      \
+    kvStore_Destroy(kv); \
+    JS_TEARDOWN
 
 // Custom codec helpers used by the unit tests.
 
@@ -1143,6 +921,14 @@ test_KVNoOp(void)
     testCond((s == NATS_OK) && (strcmp(kvCodecEntry_Key(entry), kvEntry_Key(raw)) == 0) && (strcmp(kvCodecEntry_ValueString(entry), kvEntry_ValueString(raw)) == 0));
     kvCodecEntry_Destroy(entry);
     kvEntry_Destroy(raw);
+    entry = NULL;
+
+    test("Empty value round-trips as non-NULL, zero-length: ");
+    s = kvCodec_PutString(NULL, c, "empty.key", "");
+    if (s == NATS_OK)
+        s = kvCodec_Get(&entry, c, "empty.key");
+    testCond((s == NATS_OK) && (kvCodecEntry_Value(entry) != NULL) && (kvCodecEntry_ValueLen(entry) == 0) && (strcmp(kvCodecEntry_ValueString(entry), "") == 0));
+    kvCodecEntry_Destroy(entry);
 
     kvCodec_Destroy(c);
     KV_TEARDOWN;
@@ -1485,58 +1271,5 @@ test_KVPassThrough(void)
 int
 main(int argc, char **argv)
 {
-    const char *envStr;
-    const char *testName = NULL;
-    testFunc    f        = NULL;
-    int         i;
-
-    if (argc != 2)
-    {
-        printf("@@ Usage: %s [testname]\n", argv[0]);
-        return 1;
-    }
-    testName = argv[1];
-
-    envStr = getenv("NATS_TEST_SERVER_EXE");
-    if (envStr != NULL && envStr[0] != '\0')
-        natsServerExe = envStr;
-
-    envStr = getenv("NATS_TEST_KEEP_SERVER_OUTPUT");
-    if (envStr != NULL && envStr[0] != '\0')
-        keepServerOutput = true;
-
-    if (nats_Open(-1) != NATS_OK)
-    {
-        printf("@@ Unable to run tests: unable to initialize the library!\n");
-        return 1;
-    }
-
-    for (i = 0; i < (int)(sizeof(allTests) / sizeof(allTests[0])); i++)
-    {
-        if (strcmp(testName, allTests[i].name) != 0)
-            continue;
-        printf("\033[0;34m\n== %s ==\n\033[0;0m", allTests[i].name);
-        f = allTests[i].func;
-        f();
-        break;
-    }
-
-    if (f == NULL)
-    {
-        printf("@@ Test '%s' not found!\n", testName);
-        return 1;
-    }
-
-    if (g_serverPid != NATS_INVALID_PID)
-        _stopServer(g_serverPid);
-    remove(LOGFILE_NAME);
-    nats_CloseAndWait(failed ? 1 : 2000);
-
-    if (failed)
-    {
-        printf("*** TEST FAILED ***\n");
-        return 1;
-    }
-    printf("ALL PASSED\n");
-    return 0;
+    return testMain(argc, argv);
 }

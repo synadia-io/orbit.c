@@ -36,9 +36,6 @@
 
 #define SYS_PING_TARGET "PING"
 
-#define IFOK(s, c) \
-    if (s == NATS_OK) { s = (c); }
-
 struct __natsSysClient
 {
     natsConnection *nc; // borrowed
@@ -101,7 +98,7 @@ sysclient_freeList(void ***items, int *count, sysDestroyFn destroy, const void *
 // Page walks. The loop that drives one (deadline, offset arithmetic, and the
 // empty-page guard orbit.go's per-server iterators lack) lives in
 // sysclient.c; an endpoint describes its pages by offset and supplies code
-// only for fetching a page and copying its options.
+// only for copying its options.
 
 typedef bool (*sysPageHandler)(void *page, void *closure);
 
@@ -122,11 +119,7 @@ typedef struct
     natsStatus (*CopyOptions)(void *dst, const void *src);
     void (*FreeOptions)(void *opts);
 
-    // Requests one page with 'opts' (NULL meaning defaults) at 'offset'.
-    natsStatus (*Fetch)(void **page, natsSysClient *client, const char *serverID,
-                        const void *opts, int offset, int64_t timeout);
-
-    // Whether 'opts' (NULL meaning defaults) pages; NULL means always.
+    // Whether the walk's own copy of the options pages; NULL means always.
     bool (*Paged)(const void *opts);
 
 } sysWalkOps;
@@ -159,7 +152,6 @@ typedef struct
     void             *opts;     // deep copy
     void             *first;    // the ping's page, until delivered
     int               total;    // from the first page, never refreshed
-    int               offset;   // of the next page
     bool              done;
 
 } sysWalk;

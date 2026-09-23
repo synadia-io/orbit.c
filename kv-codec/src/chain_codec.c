@@ -154,9 +154,9 @@ _valueChainTransform(void **out, int *outLen, const void *in, int inLen,
         int         nextLen = 0;
 
         if (decode)
-            s = vc->decodeValue(&next, &nextLen, src, srcLen, vc->closure);
+            s = kvcodec_decodeValue(&next, &nextLen, vc, src, srcLen);
         else
-            s = vc->encodeValue(&next, &nextLen, src, srcLen, vc->closure);
+            s = kvcodec_encodeValue(&next, &nextLen, vc, src, srcLen);
         NATS_FREE(cur);
         if (s != NATS_OK)
             return s;

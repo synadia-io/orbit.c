@@ -22,8 +22,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define IFOK(s, c)      if (s == NATS_OK) { s = (c); }
-
 typedef struct __natsContext
 {
     char *name;

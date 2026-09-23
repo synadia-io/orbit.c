@@ -272,22 +272,6 @@ natsSysJszRespList_Destroy(natsSysJszRespList *list)
                        &_endpoint);
 }
 
-// sysWalkOps.Fetch: the offset is advanced on a shallow copy of the options.
-static natsStatus
-_fetch(void **page, natsSysClient *client, const char *serverID, const void *optsv,
-       int offset, int64_t timeout)
-{
-    natsSysJszOptions pageOpts;
-
-    if (optsv != NULL)
-        pageOpts = *(const natsSysJszOptions *) optsv;
-    else
-        natsSysJszOptions_Init(&pageOpts);
-    pageOpts.Offset = offset;
-
-    return natsSysClient_Jsz((natsSysJszResp **) page, client, serverID, &pageOpts, timeout);
-}
-
 // sysWalkOps.Paged: the server pages account details only when asked for
 // all of them; a named Account returns just that one at every offset.
 static bool
@@ -295,7 +279,7 @@ _paged(const void *optsv)
 {
     const natsSysJszOptions *opts = (const natsSysJszOptions *) optsv;
 
-    return (opts != NULL) && opts->Accounts && nats_IsStringEmpty(opts->Account);
+    return opts->Accounts && nats_IsStringEmpty(opts->Account);
 }
 
 static const sysWalkOps _walkOps = {
@@ -306,7 +290,6 @@ static const sysWalkOps _walkOps = {
     SYS_INT_OFF(natsSysJszResp, JSInfo.JetStreamStats.Accounts),
     _copyOptions,
     _freeOptionsCopy,
-    _fetch,
     _paged,
 };
 

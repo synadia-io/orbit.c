@@ -14,9 +14,9 @@
 #include "../os_shims.h"
 
 natsStatus
-natsMutex_Create(natsMutex **newMutex)
+orbitMutex_Create(orbitMutex **newMutex)
 {
-    natsMutex *m = calloc(1, sizeof(natsMutex));
+    orbitMutex *m = calloc(1, sizeof(orbitMutex));
 
     if (m == NULL)
         return NATS_NO_MEMORY;
@@ -31,7 +31,7 @@ natsMutex_Create(natsMutex **newMutex)
 }
 
 bool
-natsMutex_TryLock(natsMutex *m)
+orbitMutex_TryLock(orbitMutex *m)
 {
     if (TryEnterCriticalSection(m) == 0)
         return false;
@@ -40,19 +40,19 @@ natsMutex_TryLock(natsMutex *m)
 }
 
 void
-natsMutex_Lock(natsMutex *m)
+orbitMutex_Lock(orbitMutex *m)
 {
     EnterCriticalSection(m);
 }
 
 void
-natsMutex_Unlock(natsMutex *m)
+orbitMutex_Unlock(orbitMutex *m)
 {
     LeaveCriticalSection(m);
 }
 
 void
-natsMutex_Destroy(natsMutex *m)
+orbitMutex_Destroy(orbitMutex *m)
 {
     if (m == NULL)
         return;

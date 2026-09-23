@@ -239,9 +239,10 @@ _parseString(_jsonParser *ps, char **out)
                     p += 6;
                     cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                 }
-                else if ((cp >= 0xDC00) && (cp <= 0xDFFF))
+                else if (((cp >= 0xDC00) && (cp <= 0xDFFF)) || (cp == 0))
                 {
-                    // Unpaired low surrogate.
+                    // Unpaired low surrogate, or a NUL that would silently
+                    // truncate the C string.
                     NATS_FREE(buf);
                     return NATS_ERR;
                 }
@@ -637,10 +638,14 @@ natsJSON_Parse(natsJSON **newJSON, const char *data, int len)
     natsJSON   *root = NULL;
     natsStatus  s;
 
-    if ((newJSON == NULL) || (data == NULL) || (len < 0))
+    if ((newJSON == NULL) || ((data == NULL) && (len != 0)) || (len < 0))
         return NATS_INVALID_ARG;
 
     *newJSON = NULL;
+
+    // Empty input; also keeps NULL data out of the pointer arithmetic below.
+    if (len == 0)
+        return NATS_ERR;
 
     ps.cur   = data;
     ps.end   = data + len;
@@ -866,6 +871,25 @@ natsJSON_GetStr(const natsJSON *json, const char *key, char **out)
 
     *out = NATS_STRDUP(field->v.str);
     return (*out == NULL) ? NATS_NO_MEMORY : NATS_OK;
+}
+
+natsStatus
+natsJSON_GetStrRef(const natsJSON *json, const char *key, const char **out)
+{
+    natsJSON  *field = NULL;
+    natsStatus s;
+
+    if (out == NULL)
+        return NATS_INVALID_ARG;
+
+    s = natsJSON_Lookup(json, key, &field);
+    if (s != NATS_OK)
+        return s;
+    if (field->type != NATS_JSON_STRING)
+        return NATS_INVALID_ARG;
+
+    *out = field->v.str;
+    return NATS_OK;
 }
 
 natsStatus

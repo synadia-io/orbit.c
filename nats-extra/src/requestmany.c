@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #include "requestmany.h"
+
+#include "msg.h"
 #include "os_shims.h"
 
 #define INITIAL_LIST_CAP 16
@@ -19,11 +21,8 @@
 // Default overall deadline, in milliseconds, used when opts->timeout is 0.
 #define DEFAULT_REQUEST_MANY_TIMEOUT 5000
 
-static int64_t
-_nowMs(void)
-{
-    return nats_NowMonotonicInNanoSeconds() / 1000000;
-}
+// Timeouts are capped so that now + timeout cannot overflow an int64.
+#define MAX_REQUEST_MANY_TIMEOUT ((uint64_t)7 * 24 * 60 * 60 * 1000)
 
 natsStatus
 natsRequestManyOpts_Init(natsRequestManyOpts *opts)
@@ -53,32 +52,6 @@ _listAppend(natsMsgList *list, natsMsg *msg, int *cap)
     }
     list->Msgs[list->Count++] = msg;
     return NATS_OK;
-}
-
-static natsStatus
-_copyHeaders(natsMsg *dst, natsMsg *src)
-{
-    const char **keys     = NULL;
-    int          keyCount = 0;
-
-    natsStatus s = natsMsgHeader_Keys(src, &keys, &keyCount);
-    if (s == NATS_NOT_FOUND)
-        return NATS_OK; // src carries no headers
-    if (s != NATS_OK)
-        return s;
-
-    for (int i = 0; s == NATS_OK && i < keyCount; i++)
-    {
-        const char **vals     = NULL;
-        int          valCount = 0;
-
-        s = natsMsgHeader_Values(src, keys[i], &vals, &valCount);
-        for (int j = 0; s == NATS_OK && j < valCount; j++)
-            s = natsMsgHeader_Add(dst, keys[i], vals[j]);
-        free((void *)vals);
-    }
-    free((void *)keys);
-    return s;
 }
 
 static natsStatus
@@ -115,7 +88,7 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
         s = natsMsg_Create(&startMsg, natsMsg_GetSubject(msg), inbox,
                            natsMsg_GetData(msg), natsMsg_GetDataLength(msg));
         if (s == NATS_OK)
-            s = _copyHeaders(startMsg, msg);
+            s = natsMsg_CopyHeaders(startMsg, msg);
     }
 
     if (s != NATS_OK)
@@ -126,11 +99,13 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
 
     count    = opts->Count;
     timeout  = (opts->Timeout == 0) ? DEFAULT_REQUEST_MANY_TIMEOUT : opts->Timeout;
-    deadline = _nowMs() + (int64_t)timeout;
+    if (timeout > MAX_REQUEST_MANY_TIMEOUT)
+        timeout = MAX_REQUEST_MANY_TIMEOUT;
+    deadline = natsSys_NowMs() + (int64_t)timeout;
 
     while (s == NATS_OK)
     {
-        int64_t leftMs = deadline - _nowMs();
+        int64_t leftMs = deadline - natsSys_NowMs();
         bool    stallBound;
 
         if (leftMs <= 0)
@@ -142,7 +117,7 @@ _requestManyInternal(natsMsgList *list, natsConnection *nc, natsMsg *msg, const 
         // The stall timer measures the gap since the last reply, so it only
         // applies once at least one reply has arrived. Until then the wait is
         // bounded solely by the overall deadline.
-        stallBound = (opts->Stall > 0 && list->Count > 0 && (int64_t)opts->Stall < leftMs);
+        stallBound = (opts->Stall > 0 && list->Count > 0 && opts->Stall < (uint64_t)leftMs);
 
         s = natsSubscription_NextMsg(&nextMsg, sub, stallBound ? (int64_t)opts->Stall : leftMs);
         if (s != NATS_OK)

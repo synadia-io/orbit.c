@@ -24,8 +24,8 @@
 #include <errno.h>
 #include <time.h>
 
-typedef pthread_mutex_t natsMutex;
-typedef pthread_cond_t  natsCondition;
+typedef pthread_mutex_t orbitMutex;
+typedef pthread_cond_t  orbitCondition;
 
 // Fills *(tm) from *(secs) (UTC); evaluates to true on success. Mirrors the
 // Windows gmtime_s shim in n-win.h, which has reversed arguments.

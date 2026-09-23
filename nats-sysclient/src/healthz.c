@@ -74,7 +74,6 @@ static natsStatus
 _parseHealthzError(void *elem, natsJSON *node)
 {
     natsSysHealthzError *herr = (natsSysHealthzError *) elem;
-    natsJSON            *typ  = NULL;
     const char          *str  = NULL;
     natsStatus           s;
     int                  i;
@@ -85,10 +84,9 @@ _parseHealthzError(void *elem, natsJSON *node)
         return s;
 
     // The server sends the type by name.
-    s = natsJSON_Lookup(node, "type", &typ);
+    s = natsJSON_GetStrRef(node, "type", &str);
     if (s == NATS_NOT_FOUND)
         return NATS_OK;
-    IFOK(s, natsJSON_AsStr(typ, &str));
     if (s != NATS_OK)
         return s;
 

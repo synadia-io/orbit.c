@@ -14,9 +14,9 @@
 #include "../os_shims.h"
 
 natsStatus
-natsCondition_Create(natsCondition **cond)
+orbitCondition_Create(orbitCondition **cond)
 {
-    natsCondition   *c = (natsCondition*) calloc(1, sizeof(natsCondition));
+    orbitCondition   *c = (orbitCondition*) calloc(1, sizeof(orbitCondition));
     natsStatus      s  = NATS_OK;
 
     if (c == NULL)
@@ -29,14 +29,14 @@ natsCondition_Create(natsCondition **cond)
 }
 
 void
-natsCondition_Wait(natsCondition *cond, natsMutex *mutex)
+orbitCondition_Wait(orbitCondition *cond, orbitMutex *mutex)
 {
     if (SleepConditionVariableCS(cond, mutex, INFINITE) == 0)
         abort();
 }
 
 natsStatus
-natsCondition_TimedWait(natsCondition *cond, natsMutex *mutex, int64_t timeout)
+orbitCondition_TimedWait(orbitCondition *cond, orbitMutex *mutex, int64_t timeout)
 {
     if (timeout <= 0)
         return NATS_TIMEOUT;
@@ -53,7 +53,7 @@ natsCondition_TimedWait(natsCondition *cond, natsMutex *mutex, int64_t timeout)
 }
 
 natsStatus
-natsCondition_AbsoluteTimedWait(natsCondition *cond, natsMutex *mutex, int64_t absoluteTime)
+orbitCondition_AbsoluteTimedWait(orbitCondition *cond, orbitMutex *mutex, int64_t absoluteTime)
 {
     int64_t now = nats_Now();;
     int64_t sleepTime = absoluteTime - now;
@@ -75,19 +75,19 @@ natsCondition_AbsoluteTimedWait(natsCondition *cond, natsMutex *mutex, int64_t a
 }
 
 void
-natsCondition_Signal(natsCondition *cond)
+orbitCondition_Signal(orbitCondition *cond)
 {
     WakeConditionVariable(cond);
 }
 
 void
-natsCondition_Broadcast(natsCondition *cond)
+orbitCondition_Broadcast(orbitCondition *cond)
 {
     WakeAllConditionVariable(cond);
 }
 
 void
-natsCondition_Destroy(natsCondition *cond)
+orbitCondition_Destroy(orbitCondition *cond)
 {
     if (cond == NULL)
         return;

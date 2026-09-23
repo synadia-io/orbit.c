@@ -14,7 +14,9 @@
 #include "batch_fetch.h"
 
 #include "buf.h"
-#include "os_shims.h" // nats_gmtime + public nats time API
+#include "json.h"
+#include "os_shims.h" // nats_gmtime
+#include "requestmany.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,16 +32,6 @@
 #define HDR_STATUS         "Status"
 #define HDR_DESCRIPTION    "Description"
 
-#define INITIAL_LIST_CAP 16
-
-#define COMMA_IF_NEEDED                       \
-    do                                        \
-    {                                         \
-        if (s == NATS_OK && comma)            \
-            s = natsBuf_AppendByte(out, ','); \
-        comma = true;                         \
-    } while (0)
-
 natsStatus
 jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
 {
@@ -49,212 +41,69 @@ jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
     return NATS_OK;
 }
 
-// JSON helpers
-
+// Formats 'nsec' (nanoseconds since the Unix epoch) as RFC 3339.
 static natsStatus
-_jsonAppendStringQuoted(natsBuffer *b, const char *s)
-{
-    natsStatus st = natsBuf_AppendByte(b, '"');
-    const char *p;
-
-    for (p = s; *p != '\0' && st == NATS_OK; p++)
-    {
-        unsigned char c = (unsigned char)*p;
-        switch (c)
-        {
-            case '"':
-                st = natsBuf_Append(b, "\\\"", 2);
-                break;
-            case '\\':
-                st = natsBuf_Append(b, "\\\\", 2);
-                break;
-            case '\b':
-                st = natsBuf_Append(b, "\\b", 2);
-                break;
-            case '\f':
-                st = natsBuf_Append(b, "\\f", 2);
-                break;
-            case '\n':
-                st = natsBuf_Append(b, "\\n", 2);
-                break;
-            case '\r':
-                st = natsBuf_Append(b, "\\r", 2);
-                break;
-            case '\t':
-                st = natsBuf_Append(b, "\\t", 2);
-                break;
-            default:
-                if (c < 0x20)
-                {
-                    char buf[8];
-                    int n = snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    st = natsBuf_Append(b, buf, n);
-                }
-                else
-                {
-                    st = natsBuf_AppendByte(b, (char)c);
-                }
-                break;
-        }
-    }
-    if (st == NATS_OK)
-        st = natsBuf_AppendByte(b, '"');
-    return st;
-}
-
-static natsStatus
-_jsonAppendU64(natsBuffer *b, uint64_t v)
-{
-    char tmp[32];
-    int n = snprintf(tmp, sizeof(tmp), "%" PRIu64, v);
-    if (n < 0 || n >= (int)sizeof(tmp))
-        return NATS_ERR;
-    return natsBuf_Append(b, tmp, n);
-}
-
-static natsStatus
-_jsonAppendInt(natsBuffer *b, int v)
-{
-    char tmp[16];
-    int n = snprintf(tmp, sizeof(tmp), "%d", v);
-    if (n < 0 || n >= (int)sizeof(tmp))
-        return NATS_ERR;
-    return natsBuf_Append(b, tmp, n);
-}
-
-static natsStatus
-_jsonAppendTimeRFC3339(natsBuffer *b, uint64_t nsec)
+_formatTimeRFC3339(char *out, size_t cap, uint64_t nsec)
 {
     time_t secs = (time_t)(nsec / 1000000000ULL);
     uint32_t nanos = (uint32_t)(nsec % 1000000000ULL);
     struct tm tm;
-    char tmp[48];
     int n;
 
     if (!nats_gmtime(&secs, &tm))
         return NATS_ERR;
 
-    n = snprintf(tmp, sizeof(tmp),
-                 "\"%04d-%02d-%02dT%02d:%02d:%02d.%09" PRIu32 "Z\"",
+    n = snprintf(out, cap,
+                 "%04d-%02d-%02dT%02d:%02d:%02d.%09" PRIu32 "Z",
                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                  tm.tm_hour, tm.tm_min, tm.tm_sec, nanos);
-    if (n < 0 || n >= (int)sizeof(tmp))
+    if (n < 0 || n >= (int)cap)
         return NATS_ERR;
-    return natsBuf_Append(b, tmp, n);
+    return NATS_OK;
 }
 
-static natsStatus
-_appendLit(natsBuffer *b, const char *s)
+static void
+_addTime(natsJSONWriter *w, const char *key, uint64_t nsec)
 {
-    return natsBuf_Append(b, s, (int)strlen(s));
+    char tmp[48];
+
+    if (natsJSONWriter_Fail(w, _formatTimeRFC3339(tmp, sizeof(tmp), nsec)) == NATS_OK)
+        natsJSONWriter_AddStr(w, key, tmp);
 }
 
 static natsStatus
 _buildRequest(natsBuffer *out, const jsBatchFetchOptions *bopts)
 {
-    natsStatus s = NATS_OK;
-    bool comma = false;
+    natsJSONWriter w;
     bool haveSeq = (bopts->Sequence > 0);
     bool haveT = (bopts->StartTime > 0);
     bool haveML = (bopts->MultiLastFor != NULL && bopts->MultiLastForLen > 0);
-    bool emitSeq;
-    int i;
 
-    if ((s = natsBuf_AppendByte(out, '{')) != NATS_OK)
-        return s;
+    natsJSONWriter_Init(&w, out);
+    natsJSONWriter_StartObject(&w);
 
     // For non-multi-last requests with neither seq nor start_time, default
     // to seq=1; otherwise the server returns no messages.
-    emitSeq = haveSeq || (!haveT && !haveML);
-    if (emitSeq)
-    {
-        uint64_t seq = haveSeq ? bopts->Sequence : 1;
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"seq\":");
-        if (s == NATS_OK)
-            s = _jsonAppendU64(out, seq);
-    }
+    if (haveSeq || (!haveT && !haveML))
+        natsJSONWriter_AddUInt(&w, "seq", haveSeq ? bopts->Sequence : 1);
+    if (!nats_IsStringEmpty(bopts->NextBySubject))
+        natsJSONWriter_AddStr(&w, "next_by_subj", bopts->NextBySubject);
+    if (bopts->Batch > 0)
+        natsJSONWriter_AddInt(&w, "batch", bopts->Batch);
+    if (bopts->MaxBytes > 0)
+        natsJSONWriter_AddInt(&w, "max_bytes", bopts->MaxBytes);
+    if (haveT)
+        _addTime(&w, "start_time", bopts->StartTime);
+    if (haveML)
+        natsJSONWriter_AddStrArray(&w, "multi_last", (const char *const *)bopts->MultiLastFor,
+                                   bopts->MultiLastForLen);
+    if (bopts->UpToSeq > 0)
+        natsJSONWriter_AddUInt(&w, "up_to_seq", bopts->UpToSeq);
+    if (bopts->UpToTime > 0)
+        _addTime(&w, "up_to_time", bopts->UpToTime);
 
-    if (s == NATS_OK && bopts->NextBySubject != NULL && bopts->NextBySubject[0] != '\0')
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"next_by_subj\":");
-        if (s == NATS_OK)
-            s = _jsonAppendStringQuoted(out, bopts->NextBySubject);
-    }
-
-    if (s == NATS_OK && bopts->Batch > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"batch\":");
-        if (s == NATS_OK)
-            s = _jsonAppendInt(out, bopts->Batch);
-    }
-
-    if (s == NATS_OK && bopts->MaxBytes > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"max_bytes\":");
-        if (s == NATS_OK)
-            s = _jsonAppendInt(out, bopts->MaxBytes);
-    }
-
-    if (s == NATS_OK && haveT)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"start_time\":");
-        if (s == NATS_OK)
-            s = _jsonAppendTimeRFC3339(out, bopts->StartTime);
-    }
-
-    if (s == NATS_OK && haveML)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"multi_last\":[");
-        for (i = 0; s == NATS_OK && i < bopts->MultiLastForLen; i++)
-        {
-            if (i > 0)
-                s = natsBuf_AppendByte(out, ',');
-            if (s == NATS_OK)
-            {
-                const char *subj = bopts->MultiLastFor[i];
-                if (subj == NULL)
-                    return NATS_INVALID_ARG;
-                s = _jsonAppendStringQuoted(out, subj);
-            }
-        }
-        if (s == NATS_OK)
-            s = natsBuf_AppendByte(out, ']');
-    }
-
-    if (s == NATS_OK && bopts->UpToSeq > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"up_to_seq\":");
-        if (s == NATS_OK)
-            s = _jsonAppendU64(out, bopts->UpToSeq);
-    }
-
-    if (s == NATS_OK && bopts->UpToTime > 0)
-    {
-        COMMA_IF_NEEDED;
-        if (s == NATS_OK)
-            s = _appendLit(out, "\"up_to_time\":");
-        if (s == NATS_OK)
-            s = _jsonAppendTimeRFC3339(out, bopts->UpToTime);
-    }
-
-    if (s == NATS_OK)
-        s = natsBuf_AppendByte(out, '}');
-
-    return s;
+    natsJSONWriter_EndObject(&w);
+    return natsJSONWriter_Status(&w);
 }
 
 // Build the request subject "<prefix>DIRECT.GET.<stream>".
@@ -317,6 +166,11 @@ _validate(const char *stream, const jsBatchFetchOptions *bopts)
             return NATS_INVALID_ARG;
         if (bopts->MultiLastForLen > JS_BATCH_FETCH_MAX_SUBJECTS)
             return NATS_INVALID_ARG;
+        for (int i = 0; i < bopts->MultiLastForLen; i++)
+        {
+            if (bopts->MultiLastFor[i] == NULL)
+                return NATS_INVALID_ARG;
+        }
     }
     else if (bopts->MultiLastForLen != 0)
     {
@@ -334,6 +188,7 @@ typedef enum
     KIND_ERR_404,    ///< No matching messages.
     KIND_ERR_408,    ///< Bad request.
     KIND_ERR_413,    ///< Payload-too-large / too many subjects.
+    KIND_ERR_503,    ///< No responders (stream missing or direct get disabled).
     KIND_UNSUPPORTED ///< Server lacks batch DIRECT.GET (no Nats-Num-Pending).
 
 } _msgKind;
@@ -370,6 +225,8 @@ _classify(natsMsg *msg, bool firstMessageCheck)
                 return KIND_ERR_408;
             if (strcmp(status, "413") == 0)
                 return KIND_ERR_413;
+            if (strcmp(status, "503") == 0)
+                return KIND_ERR_503;
             if (strcmp(status, "204") == 0 && desc != NULL && strcmp(desc, "EOB") == 0)
                 return KIND_TERM_OK;
         }
@@ -408,6 +265,8 @@ _kindToStatus(_msgKind k, jsErrCode *errCodeOut)
             return NATS_ERR;
         case KIND_ERR_413:
             return NATS_ERR;
+        case KIND_ERR_503:
+            return NATS_NO_RESPONDERS;
         case KIND_UNSUPPORTED:
             return NATS_NO_SERVER_SUPPORT;
         case KIND_DATA:
@@ -416,23 +275,11 @@ _kindToStatus(_msgKind k, jsErrCode *errCodeOut)
     }
 }
 
-// Time helpers — millisecond monotonic clock.
-
-static int64_t
-_nowMs(void)
-{
-    // Public, cross-platform monotonic clock (QueryPerformanceCounter on
-    // Windows, clock_gettime(CLOCK_MONOTONIC) on POSIX).
-    return nats_NowMonotonicInNanoSeconds() / 1000000;
-}
-
-// Common request setup — build subject + body, create inbox.
-// natsInbox is `typedef char` so it doubles as the reply subject string.
+// Common request setup — validate, build subject + body.
 
 typedef struct
 {
     char       *subj;
-    char       *inbox; // owned natsInbox; freed with natsInbox_Destroy
     natsBuffer *body;
 
 } _setupCtx;
@@ -442,8 +289,6 @@ _setupFree(_setupCtx *c)
 {
     free(c->subj);
     c->subj = NULL;
-    natsInbox_Destroy(c->inbox);
-    c->inbox = NULL;
     natsBuf_Destroy(c->body);
     c->body = NULL;
 }
@@ -478,10 +323,6 @@ _setup(const char *stream, jsOptions *opts, jsBatchFetchOptions *bopts, _setupCt
     if (s != NATS_OK)
         goto err;
 
-    s = natsInbox_Create(&out->inbox);
-    if (s != NATS_OK)
-        goto err;
-
     return NATS_OK;
 
 err:
@@ -491,23 +332,22 @@ err:
 
 // Sync API
 
-static natsStatus
-_growList(natsMsg ***arr, int *cap, int len)
+typedef struct
 {
-    int newCap;
-    natsMsg **p;
+    _msgKind kind;
+    bool     firstChecked;
 
-    if (len < *cap)
-        return NATS_OK;
+} _syncCtx;
 
-    newCap = (*cap == 0) ? INITIAL_LIST_CAP : *cap * 2;
-    p = (natsMsg **)realloc(*arr, (size_t)newCap * sizeof(natsMsg *));
-    if (p == NULL)
-        return NATS_NO_MEMORY;
+// natsRequestManySentinel: every non-data reply ends the fetch.
+static bool
+_syncSentinel(natsMsg *msg, void *closure)
+{
+    _syncCtx *ctx = (_syncCtx *)closure;
 
-    *arr = p;
-    *cap = newCap;
-    return NATS_OK;
+    ctx->kind = _classify(msg, !ctx->firstChecked);
+    ctx->firstChecked = true;
+    return ctx->kind != KIND_DATA;
 }
 
 natsStatus
@@ -516,11 +356,8 @@ jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, js
 {
     natsStatus s;
     _setupCtx stp = { 0 };
-    natsSubscription *sub = NULL;
-    natsMsg **msgs = NULL;
-    int msgCap = 0;
-    int msgLen = 0;
-    int64_t deadline;
+    _syncCtx ctx = { KIND_DATA, false };
+    natsRequestManyOpts rmOpts;
 
     if (errCode != NULL)
         *errCode = (jsErrCode)0;
@@ -535,74 +372,16 @@ jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, js
     if (s != NATS_OK)
         return s;
 
-    // If the caller hinted a batch size, pre-size to avoid reallocs.
-    if (bopts->Batch > 0)
-    {
-        msgs = (natsMsg **)malloc((size_t)bopts->Batch * sizeof(natsMsg *));
-        if (msgs == NULL)
-        {
-            s = NATS_NO_MEMORY;
-            goto cleanup;
-        }
-        msgCap = bopts->Batch;
-    }
+    natsRequestManyOpts_Init(&rmOpts);
+    rmOpts.Timeout = (uint64_t)timeout;
+    rmOpts.Sentinel = _syncSentinel;
+    rmOpts.SentinelClosure = &ctx;
 
-    s = natsConnection_SubscribeSync(&sub, nc, stp.inbox);
-    if (s != NATS_OK)
-        goto cleanup;
+    s = natsRequestMany_Request(list, nc, stp.subj, stp.body->data, stp.body->len, &rmOpts);
+    if (s == NATS_OK)
+        s = _kindToStatus(ctx.kind, errCode);
 
-    s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
-                                      stp.body->data, stp.body->len);
-    if (s != NATS_OK)
-        goto cleanup;
-
-    deadline = _nowMs() + timeout;
-
-    while (s == NATS_OK)
-    {
-        natsMsg *m = NULL;
-        int64_t leftMs = deadline - _nowMs();
-        _msgKind kind;
-
-        if (leftMs <= 0)
-        {
-            s = NATS_TIMEOUT;
-            break;
-        }
-
-        s = natsSubscription_NextMsg(&m, sub, leftMs);
-        if (s != NATS_OK)
-            break;
-
-        kind = _classify(m, msgLen == 0);
-
-        if (kind == KIND_DATA)
-        {
-            s = _growList(&msgs, &msgCap, msgLen);
-            if (s != NATS_OK)
-            {
-                natsMsg_Destroy(m);
-                break;
-            }
-            msgs[msgLen++] = m;
-            continue;
-        }
-
-        natsMsg_Destroy(m);
-        s = _kindToStatus(kind, errCode);
-        break;
-    }
-
-cleanup:
-    if (sub != NULL)
-    {
-        natsSubscription_Unsubscribe(sub);
-        natsSubscription_Destroy(sub);
-    }
     _setupFree(&stp);
-
-    list->Msgs = msgs;
-    list->Count = msgLen;
     return s;
 }
 
@@ -617,6 +396,7 @@ typedef struct
     jsErrCode                   finalErr;
     bool                        done;
     bool                        firstChecked;
+    bool                        setupFailed;
 
 } _asyncCtx;
 
@@ -658,6 +438,14 @@ _asyncOnComplete(void *closure)
 {
     _asyncCtx *ctx = (_asyncCtx *)closure;
 
+    // The request was never sent and the caller already has the error.
+    if (ctx->setupFailed)
+    {
+        natsSubscription_Destroy(ctx->sub);
+        free(ctx);
+        return;
+    }
+
     // doneCB may not have been set if Unsubscribe never fired (e.g. the
     // subscription was closed by connection shutdown). In that case we
     // still want to surface a status to the user.
@@ -676,6 +464,7 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
 {
     natsStatus s;
     _setupCtx stp = { 0 };
+    natsInbox *inbox = NULL;
     natsSubscription *sub = NULL;
     _asyncCtx *ctx = NULL;
 
@@ -685,6 +474,10 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
     s = _setup(stream, opts, bopts, &stp);
     if (s != NATS_OK)
         return s;
+
+    s = natsInbox_Create(&inbox);
+    if (s != NATS_OK)
+        goto err;
 
     ctx = (_asyncCtx *)calloc(1, sizeof(*ctx));
     if (ctx == NULL)
@@ -697,7 +490,7 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
     ctx->doneCB = doneCB;
     ctx->closure = closure;
 
-    s = natsConnection_Subscribe(&sub, nc, stp.inbox, _asyncOnMsg, ctx);
+    s = natsConnection_Subscribe(&sub, nc, inbox, _asyncOnMsg, ctx);
     if (s != NATS_OK)
         goto err;
 
@@ -706,13 +499,16 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
     if (s != NATS_OK)
         goto err;
 
-    s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
+    s = natsConnection_PublishRequest(nc, stp.subj, inbox,
                                       stp.body->data, stp.body->len);
     if (s != NATS_OK)
     {
+        // OnComplete owns ctx now; it must not call doneCB for a failed setup.
+        ctx->setupFailed = true;
         natsSubscription_Unsubscribe(sub);
     }
 
+    natsInbox_Destroy(inbox);
     _setupFree(&stp);
     return s;
 
@@ -723,6 +519,7 @@ err:
         natsSubscription_Destroy(sub);
     }
     free(ctx);
+    natsInbox_Destroy(inbox);
     _setupFree(&stp);
     return s;
 }

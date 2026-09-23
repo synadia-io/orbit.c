@@ -30,8 +30,8 @@
 #pragma warning(disable : 4996)
 #endif
 
-typedef CRITICAL_SECTION    natsMutex;
-typedef CONDITION_VARIABLE  natsCondition;
+typedef CRITICAL_SECTION    orbitMutex;
+typedef CONDITION_VARIABLE  orbitCondition;
 
 // Fills *(tm) from *(secs) (UTC); evaluates to true on success. gmtime_s takes
 // its arguments in the opposite order from POSIX gmtime_r and returns an
