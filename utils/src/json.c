@@ -637,10 +637,14 @@ natsJSON_Parse(natsJSON **newJSON, const char *data, int len)
     natsJSON   *root = NULL;
     natsStatus  s;
 
-    if ((newJSON == NULL) || (data == NULL) || (len < 0))
+    if ((newJSON == NULL) || ((data == NULL) && (len != 0)) || (len < 0))
         return NATS_INVALID_ARG;
 
     *newJSON = NULL;
+
+    // Empty input; also keeps NULL data out of the pointer arithmetic below.
+    if (len == 0)
+        return NATS_ERR;
 
     ps.cur   = data;
     ps.end   = data + len;

@@ -15,7 +15,8 @@
 
 #include "buf.h"
 #include "json.h"
-#include "os_shims.h" // nats_gmtime + public nats time API
+#include "os_shims.h" // nats_gmtime
+#include "requestmany.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,8 +31,6 @@
 #define NATS_UPTO_SEQUENCE "Nats-UpTo-Sequence"
 #define HDR_STATUS         "Status"
 #define HDR_DESCRIPTION    "Description"
-
-#define INITIAL_LIST_CAP 16
 
 natsStatus
 jsBatchFetchOptions_Init(jsBatchFetchOptions *opts)
@@ -202,15 +201,20 @@ _hdr(natsMsg *msg, const char *key)
     return v;
 }
 
+// Classifies the next reply; '*firstChecked' tracks whether the first one has
+// been seen.
 static _msgKind
-_classify(natsMsg *msg, bool firstMessageCheck)
+_classify(natsMsg *msg, bool *firstChecked)
 {
+    bool firstMessageCheck = !*firstChecked;
     int dataLen = natsMsg_GetDataLength(msg);
     const char *status;
     const char *desc;
     const char *seq;
     const char *numPending;
     const char *upToSeq;
+
+    *firstChecked = true;
 
     if (dataLen == 0)
     {
@@ -271,13 +275,11 @@ _kindToStatus(_msgKind k, jsErrCode *errCodeOut)
     }
 }
 
-// Common request setup — build subject + body, create inbox.
-// natsInbox is `typedef char` so it doubles as the reply subject string.
+// Common request setup — validate, build subject + body.
 
 typedef struct
 {
     char       *subj;
-    char       *inbox; // owned natsInbox; freed with natsInbox_Destroy
     natsBuffer *body;
 
 } _setupCtx;
@@ -287,8 +289,6 @@ _setupFree(_setupCtx *c)
 {
     free(c->subj);
     c->subj = NULL;
-    natsInbox_Destroy(c->inbox);
-    c->inbox = NULL;
     natsBuf_Destroy(c->body);
     c->body = NULL;
 }
@@ -323,10 +323,6 @@ _setup(const char *stream, jsOptions *opts, jsBatchFetchOptions *bopts, _setupCt
     if (s != NATS_OK)
         goto err;
 
-    s = natsInbox_Create(&out->inbox);
-    if (s != NATS_OK)
-        goto err;
-
     return NATS_OK;
 
 err:
@@ -336,23 +332,21 @@ err:
 
 // Sync API
 
-static natsStatus
-_growList(natsMsg ***arr, int *cap, int len)
+typedef struct
 {
-    int newCap;
-    natsMsg **p;
+    _msgKind kind;
+    bool     firstChecked;
 
-    if (len < *cap)
-        return NATS_OK;
+} _syncCtx;
 
-    newCap = (*cap == 0) ? INITIAL_LIST_CAP : *cap * 2;
-    p = (natsMsg **)realloc(*arr, (size_t)newCap * sizeof(natsMsg *));
-    if (p == NULL)
-        return NATS_NO_MEMORY;
+// natsRequestManySentinel: every non-data reply ends the fetch.
+static bool
+_syncSentinel(natsMsg *msg, void *closure)
+{
+    _syncCtx *ctx = (_syncCtx *)closure;
 
-    *arr = p;
-    *cap = newCap;
-    return NATS_OK;
+    ctx->kind = _classify(msg, &ctx->firstChecked);
+    return ctx->kind != KIND_DATA;
 }
 
 natsStatus
@@ -361,11 +355,8 @@ jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, js
 {
     natsStatus s;
     _setupCtx stp = { 0 };
-    natsSubscription *sub = NULL;
-    natsMsg **msgs = NULL;
-    int msgCap = 0;
-    int msgLen = 0;
-    int64_t deadline;
+    _syncCtx ctx = { KIND_DATA, false };
+    natsRequestManyOpts rmOpts;
 
     if (errCode != NULL)
         *errCode = (jsErrCode)0;
@@ -380,74 +371,16 @@ jsBatchFetch_Fetch(natsMsgList *list, natsConnection *nc, const char *stream, js
     if (s != NATS_OK)
         return s;
 
-    // If the caller hinted a batch size, pre-size to avoid reallocs.
-    if (bopts->Batch > 0)
-    {
-        msgs = (natsMsg **)malloc((size_t)bopts->Batch * sizeof(natsMsg *));
-        if (msgs == NULL)
-        {
-            s = NATS_NO_MEMORY;
-            goto cleanup;
-        }
-        msgCap = bopts->Batch;
-    }
+    natsRequestManyOpts_Init(&rmOpts);
+    rmOpts.Timeout = (uint64_t)timeout;
+    rmOpts.Sentinel = _syncSentinel;
+    rmOpts.SentinelClosure = &ctx;
 
-    s = natsConnection_SubscribeSync(&sub, nc, stp.inbox);
-    if (s != NATS_OK)
-        goto cleanup;
+    s = natsRequestMany_Request(list, nc, stp.subj, stp.body->data, stp.body->len, &rmOpts);
+    if (s == NATS_OK)
+        s = _kindToStatus(ctx.kind, errCode);
 
-    s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
-                                      stp.body->data, stp.body->len);
-    if (s != NATS_OK)
-        goto cleanup;
-
-    deadline = natsSys_NowMs() + timeout;
-
-    while (s == NATS_OK)
-    {
-        natsMsg *m = NULL;
-        int64_t leftMs = deadline - natsSys_NowMs();
-        _msgKind kind;
-
-        if (leftMs <= 0)
-        {
-            s = NATS_TIMEOUT;
-            break;
-        }
-
-        s = natsSubscription_NextMsg(&m, sub, leftMs);
-        if (s != NATS_OK)
-            break;
-
-        kind = _classify(m, msgLen == 0);
-
-        if (kind == KIND_DATA)
-        {
-            s = _growList(&msgs, &msgCap, msgLen);
-            if (s != NATS_OK)
-            {
-                natsMsg_Destroy(m);
-                break;
-            }
-            msgs[msgLen++] = m;
-            continue;
-        }
-
-        natsMsg_Destroy(m);
-        s = _kindToStatus(kind, errCode);
-        break;
-    }
-
-cleanup:
-    if (sub != NULL)
-    {
-        natsSubscription_Unsubscribe(sub);
-        natsSubscription_Destroy(sub);
-    }
     _setupFree(&stp);
-
-    list->Msgs = msgs;
-    list->Count = msgLen;
     return s;
 }
 
@@ -478,8 +411,7 @@ _asyncOnMsg(natsConnection *nc, natsSubscription *sub, natsMsg *msg, void *closu
         return;
     }
 
-    kind = _classify(msg, !ctx->firstChecked);
-    ctx->firstChecked = true;
+    kind = _classify(msg, &ctx->firstChecked);
 
     if (kind == KIND_DATA)
     {
@@ -521,6 +453,7 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
 {
     natsStatus s;
     _setupCtx stp = { 0 };
+    natsInbox *inbox = NULL;
     natsSubscription *sub = NULL;
     _asyncCtx *ctx = NULL;
 
@@ -530,6 +463,10 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
     s = _setup(stream, opts, bopts, &stp);
     if (s != NATS_OK)
         return s;
+
+    s = natsInbox_Create(&inbox);
+    if (s != NATS_OK)
+        goto err;
 
     ctx = (_asyncCtx *)calloc(1, sizeof(*ctx));
     if (ctx == NULL)
@@ -542,7 +479,7 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
     ctx->doneCB = doneCB;
     ctx->closure = closure;
 
-    s = natsConnection_Subscribe(&sub, nc, stp.inbox, _asyncOnMsg, ctx);
+    s = natsConnection_Subscribe(&sub, nc, inbox, _asyncOnMsg, ctx);
     if (s != NATS_OK)
         goto err;
 
@@ -551,13 +488,14 @@ jsBatchFetch_AsyncFetch(natsConnection *nc, const char *stream, jsOptions *opts,
     if (s != NATS_OK)
         goto err;
 
-    s = natsConnection_PublishRequest(nc, stp.subj, stp.inbox,
+    s = natsConnection_PublishRequest(nc, stp.subj, inbox,
                                       stp.body->data, stp.body->len);
     if (s != NATS_OK)
     {
         natsSubscription_Unsubscribe(sub);
     }
 
+    natsInbox_Destroy(inbox);
     _setupFree(&stp);
     return s;
 
@@ -568,6 +506,7 @@ err:
         natsSubscription_Destroy(sub);
     }
     free(ctx);
+    natsInbox_Destroy(inbox);
     _setupFree(&stp);
     return s;
 }

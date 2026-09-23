@@ -921,6 +921,14 @@ test_KVNoOp(void)
     testCond((s == NATS_OK) && (strcmp(kvCodecEntry_Key(entry), kvEntry_Key(raw)) == 0) && (strcmp(kvCodecEntry_ValueString(entry), kvEntry_ValueString(raw)) == 0));
     kvCodecEntry_Destroy(entry);
     kvEntry_Destroy(raw);
+    entry = NULL;
+
+    test("Empty value round-trips as non-NULL, zero-length: ");
+    s = kvCodec_PutString(NULL, c, "empty.key", "");
+    if (s == NATS_OK)
+        s = kvCodec_Get(&entry, c, "empty.key");
+    testCond((s == NATS_OK) && (kvCodecEntry_Value(entry) != NULL) && (kvCodecEntry_ValueLen(entry) == 0) && (strcmp(kvCodecEntry_ValueString(entry), "") == 0));
+    kvCodecEntry_Destroy(entry);
 
     kvCodec_Destroy(c);
     KV_TEARDOWN;
